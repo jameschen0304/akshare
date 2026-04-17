@@ -353,6 +353,7 @@
     let latestGapSupport = null;
     let latestGapStrong = false;
     let todayGapSupport = null;
+    const unfilledGaps = [];
     for (let i = 1; i < n; i++) {
       if (low[i] > high[i - 1]) {
         const gapBase = high[i - 1];
@@ -367,6 +368,9 @@
         }
         latestGapSupport = gapBase;
         latestGapStrong = !filled;
+        if (!filled) {
+          unfilledGaps.push({ idx: i, base: gapBase });
+        }
       }
     }
 
@@ -391,14 +395,14 @@
       if (psychSupport >= todayClose) psychSupport = psychSupport - 0.5;
     }
 
-    // A. 位置判定：高于现价必须记为压力位
+    // A. 位置判定：高于或等于现价必须记为压力位
     function splitLevels(candidates) {
       const support = [];
       const pressure = [];
       for (let i = 0; i < candidates.length; i++) {
         const it = candidates[i];
         if (it.value == null || Number.isNaN(it.value)) continue;
-        if (it.value <= todayClose) support.push(it);
+        if (it.value < todayClose) support.push(it);
         else pressure.push(it);
       }
       return { support: support, pressure: pressure };
@@ -408,25 +412,63 @@
     let level1Raw = [
       { name: "大阳线开盘价", value: moneyOpen },
       { name: "缺口下沿", value: level1Gap },
+      { name: "MA5", value: ma5 },
+      { name: "MA10", value: ma10 },
       { name: "MA20", value: ma20 },
+      { name: "MA60", value: ma60 },
     ];
     // C: 空头排列时，屏蔽模块二
     if (bearAligned) {
       level1Raw = [
         { name: "缺口下沿", value: level1Gap },
+        { name: "MA5", value: ma5 },
+        { name: "MA10", value: ma10 },
         { name: "MA20", value: ma20 },
+        { name: "MA60", value: ma60 },
       ];
       moneyOpen = null;
       moneyLow = null;
     }
     const level1Split = splitLevels(level1Raw);
-    const level1 = level1Split.support.length
-      ? Math.max.apply(null, level1Split.support.map(function (x) { return x.value; }))
-      : null;
+    // Level_1 终极顺序：未补缺口 -> 第一条在现价下方均线(MA5/10/20/60) -> 近10日低点
+    let level1 = null;
+    let level1Source = "";
+    let recentGap = null;
+    for (let i = unfilledGaps.length - 1; i >= 0; i--) {
+      if (unfilledGaps[i].base < todayClose) {
+        recentGap = unfilledGaps[i].base;
+        break;
+      }
+    }
+    if (recentGap != null) {
+      level1 = recentGap;
+      level1Source = "未补缺口下沿";
+    } else {
+      const maOrder = [
+        { name: "MA5", value: ma5 },
+        { name: "MA10", value: ma10 },
+        { name: "MA20", value: ma20 },
+        { name: "MA60", value: ma60 },
+      ];
+      for (let i = 0; i < maOrder.length; i++) {
+        if (maOrder[i].value != null && maOrder[i].value < todayClose) {
+          level1 = maOrder[i].value;
+          level1Source = maOrder[i].name;
+          break;
+        }
+      }
+    }
+    if (level1 == null) {
+      const swingLow10 = Math.min.apply(null, low.slice(Math.max(0, n - 10)));
+      level1 = swingLow10;
+      level1Source = "近10日低点";
+    }
 
     let level2Raw = [
       { name: "平台底", value: platformSupport },
       { name: "MA60", value: ma60 },
+      { name: "60日低点", value: Math.min.apply(null, low.slice(Math.max(0, n - 60))) },
+      { name: "120日低点", value: Math.min.apply(null, low.slice(Math.max(0, n - 120))) },
     ];
     if (belowAllMA) {
       level2Raw.push({ name: "250日低点", value: yearLowSupport });
@@ -441,9 +483,23 @@
       }
     }
     const level2Split = splitLevels(level2Raw);
-    const level2 = level2Split.support.length
-      ? Math.min.apply(null, level2Split.support.map(function (x) { return x.value; }))
-      : null;
+    // Level_2 终极兜底：60日低点；若离现价<3%改120日低点；再做整数关口补丁
+    const low60 = Math.min.apply(null, low.slice(Math.max(0, n - 60)));
+    const low120 = Math.min.apply(null, low.slice(Math.max(0, n - 120)));
+    let level2 = low60;
+    if (todayClose > 0 && Math.abs(todayClose - low60) / todayClose < 0.03) {
+      level2 = low120;
+    }
+    // 整数关口补丁：在 ±1% 内有 0.5 刻度关口则强制取整
+    const half = Math.round(level2 * 2) / 2;
+    if (level2 > 0 && Math.abs(half - level2) / level2 <= 0.01) {
+      level2 = half;
+    }
+    // 进一步保障“支撑必须小于现价”
+    if (level2 >= todayClose) {
+      const fallbackLow = Math.min.apply(null, low.slice(Math.max(0, n - 250)));
+      level2 = fallbackLow < todayClose ? fallbackLow : Math.max(0, todayClose * 0.97);
+    }
 
     let sentiment = "中性：未触发强趋势模板，观察 Level_1 / Level_2。";
     let sentClass = "";
@@ -464,6 +520,7 @@
       ma60: ma60,
       ma20Vol: ma20Vol,
       level1: level1,
+      level1Source: level1Source,
       level2: level2,
       level1Pressures: level1Split.pressure,
       level2Pressures: level2Split.pressure,
@@ -506,8 +563,8 @@
       ? res.level2Pressures.map(function (x) { return x.name + "=" + fmt(x.value); }).join("，")
       : "—";
     supportDl.innerHTML =
-      "<dt>Level_1（激进型支撑）</dt><dd>" + fmt(res.level1) + "（max(大阳线开盘, 缺口下沿, MA20)）</dd>" +
-      "<dt>Level_2（稳健型支撑）</dt><dd>" + fmt(res.level2) + "（min(平台底, MA60)）</dd>" +
+      "<dt>Level_1（激进型支撑）</dt><dd>" + fmt(res.level1) + "（来源: " + (res.level1Source || "规则兜底") + "）</dd>" +
+      "<dt>Level_2（稳健型支撑）</dt><dd>" + fmt(res.level2) + "（60/120日低点+整数关口兜底）</dd>" +
       "<dt>主力成本位</dt><dd>开盘=" + fmt(res.moneyOpen) + "，最低=" + fmt(res.moneyLow) + "</dd>" +
       "<dt>缺口支撑</dt><dd>" + fmt(res.gapSupport) + (res.gapSupport == null ? "" : (res.gapStrong ? "（3日未补，强）" : "（一般）")) + "</dd>" +
       "<dt>均线</dt><dd>MA5=" + fmt(res.ma5) + "，MA10=" + fmt(res.ma10) + "，MA20=" + fmt(res.ma20) + "，MA60=" + fmt(res.ma60) + "</dd>" +
