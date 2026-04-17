@@ -445,7 +445,13 @@
 
   loadPrefs();
   $("symbol").addEventListener("input", updateExtLink);
+  $("symbol").addEventListener("input", savePrefs);
   $("provider").addEventListener("change", updateExtLink);
+  $("provider").addEventListener("change", savePrefs);
+  $("period").addEventListener("change", savePrefs);
+  $("adjust").addEventListener("change", savePrefs);
+  $("beg").addEventListener("input", savePrefs);
+  $("end").addEventListener("input", savePrefs);
   updateExtLink();
 
   async function fetchKline() {
