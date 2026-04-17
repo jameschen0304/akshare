@@ -1,0 +1,48 @@
+#!/bin/sh
+# 提交后自动推送到 GitHub（需已配置 remote：fork -> 你的 akshare fork）
+# 若本次提交改动了静态页源文件，会同步到 futures-pages-bundle / stock-pages-bundle 并推送。
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$ROOT" || exit 0
+
+if git remote | grep -q '^fork$'; then
+  if ! git push fork main 2>/dev/null; then
+    echo "[post-commit] 警告: git push fork main 失败（网络、权限或未设置 fork 远程）。" >&2
+  fi
+else
+  echo "[post-commit] 提示: 未配置 remote「fork」，已跳过主仓库推送。可: git remote add fork https://github.com/<你>/akshare.git" >&2
+fi
+
+CHANGED=$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null || true)
+
+sync_one() {
+  SRC="$1"
+  DIR="$2"
+  MSG="$3"
+  if ! echo "$CHANGED" | grep -q "^${SRC}\$"; then
+    return 0
+  fi
+  if test ! -f "$ROOT/$SRC"; then
+    return 0
+  fi
+  if test ! -d "$ROOT/$DIR/.git"; then
+    return 0
+  fi
+  cp "$ROOT/$SRC" "$ROOT/$DIR/index.html" || return 0
+  (
+    cd "$ROOT/$DIR" || exit 0
+    git add index.html 2>/dev/null || true
+    if git diff --cached --quiet 2>/dev/null; then
+      return 0
+    fi
+    git commit -m "$MSG" 2>/dev/null || true
+    if ! git push origin main 2>/dev/null; then
+      echo "[post-commit] 警告: 推送 $DIR 失败。" >&2
+    fi
+  )
+}
+
+sync_one "docs/futures-tool/index.html" "futures-pages-bundle" "sync: futures-tool from akshare"
+sync_one "docs/stock-tool/index.html" "stock-pages-bundle" "sync: stock-tool from akshare"
+
+exit 0
