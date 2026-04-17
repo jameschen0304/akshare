@@ -315,6 +315,9 @@
     const high = rows.map(function (r) { return r.high; });
     const open = rows.map(function (r) { return r.open; });
     const volume = rows.map(function (r) { return r.volume; });
+    const amount = rows.map(function (r) {
+      return Number.isFinite(r.amount) ? r.amount : r.volume;
+    });
     const n = rows.length;
 
     const ma5 = rollingMean(close, 5, n - 1);
@@ -379,6 +382,35 @@
     const volShrink = ma20Vol != null && ma20VolPrev != null && todayVol < ma20Vol && todayVol < prevVol;
     const ma20PullbackSupport = nearMA20 && volShrink ? ma20 : null;
 
+    // 新增：20日 Swing Low（Low < 左右各两天）
+    let swingLow20 = null;
+    const swingWinStart = Math.max(2, n - 20);
+    for (let i = swingWinStart; i <= n - 3; i++) {
+      if (
+        low[i] < low[i - 1] &&
+        low[i] < low[i - 2] &&
+        low[i] < low[i + 1] &&
+        low[i] < low[i + 2]
+      ) {
+        if (swingLow20 == null || low[i] < swingLow20) swingLow20 = low[i];
+      }
+    }
+
+    // 新增：成交额前三名锚定支撑（低点）
+    const idxs = [];
+    for (let i = 0; i < n; i++) idxs.push(i);
+    idxs.sort(function (a, b) {
+      return amount[b] - amount[a];
+    });
+    const topAmountLows = [];
+    for (let i = 0; i < Math.min(3, idxs.length); i++) {
+      topAmountLows.push({
+        name: "成交额Top" + (i + 1) + "低点",
+        value: low[idxs[i]],
+        date: rows[idxs[i]].date,
+      });
+    }
+
     // C. 均线空头过滤
     const bearAligned = ma5 != null && ma10 != null && ma20 != null && ma60 != null && ma5 < ma10 && ma10 < ma20 && ma20 < ma60;
     const belowAllMA = ma20 != null && ma60 != null && todayClose < ma20 && todayClose < ma60;
@@ -440,7 +472,24 @@
         break;
       }
     }
-    if (recentGap != null) {
+    const activeMA = ma5 != null && ma10 != null && ma20 != null && todayClose > ma5 && todayClose > ma10 && todayClose > ma20;
+    if (activeMA) {
+      const maActive = [
+        { name: "MA5", value: ma5 },
+        { name: "MA10", value: ma10 },
+        { name: "MA20", value: ma20 },
+      ];
+      let best = null;
+      for (let i = 0; i < maActive.length; i++) {
+        if (maActive[i].value < todayClose && (best == null || maActive[i].value > best.value)) {
+          best = maActive[i];
+        }
+      }
+      if (best != null) {
+        level1 = best.value;
+        level1Source = "活跃均线优先(" + best.name + ")";
+      }
+    } else if (recentGap != null) {
       level1 = recentGap;
       level1Source = "未补缺口下沿";
     } else {
@@ -512,6 +561,21 @@
       level2 = fallbackLow < todayClose ? fallbackLow : Math.max(0, todayClose * 0.97);
     }
 
+    // 紧急优化：跨度过大(>15%)降级为“远期宏观参考”，不作为 Level_2
+    let macroRef = null;
+    if (todayClose > 0 && level2 != null && (todayClose - level2) / todayClose > 0.15) {
+      macroRef = level2;
+      const nearCandidates = [{ name: "60日低点", value: low60 }, { name: "Swing Low(20)", value: swingLow20 }];
+      for (let i = 0; i < topAmountLows.length; i++) nearCandidates.push(topAmountLows[i]);
+      const validNear = nearCandidates
+        .filter(function (x) { return x.value != null && x.value < todayClose; })
+        .sort(function (a, b) { return b.value - a.value; });
+      if (validNear.length) {
+        level2 = validNear[0].value;
+        level2Source = validNear[0].name + "（原Level_2跨度>15%，降级宏观参考）";
+      }
+    }
+
     let sentiment = "中性：未触发强趋势模板，观察 Level_1 / Level_2。";
     let sentClass = "";
     const volMildUp = ma20Vol != null && todayVol > ma20Vol * 1.05 && todayVol < ma20Vol * 2.0;
@@ -534,6 +598,7 @@
       level1Source: level1Source,
       level2: level2,
       level2Source: level2Source,
+      macroRef: macroRef,
       level1Pressures: level1Split.pressure,
       level2Pressures: level2Split.pressure,
       platformSupport: platformSupport,
@@ -551,6 +616,9 @@
       belowAllMA: belowAllMA,
       yearLowSupport: yearLowSupport,
       psychSupport: psychSupport,
+      swingLow20: swingLow20,
+      topAmountLows: topAmountLows,
+      activeMA: activeMA,
       sentiment: sentiment,
       sentClass: sentClass,
       todayClose: todayClose,
@@ -574,15 +642,22 @@
     const p2 = res.level2Pressures && res.level2Pressures.length
       ? res.level2Pressures.map(function (x) { return x.name + "=" + fmt(x.value); }).join("，")
       : "—";
+    const topAmountText = res.topAmountLows && res.topAmountLows.length
+      ? res.topAmountLows.map(function (x) { return x.date + ":" + fmt(x.value); }).join("；")
+      : "—";
     supportDl.innerHTML =
       "<dt>Level_1（激进型支撑）</dt><dd>" + fmt(res.level1) + "（来源: " + (res.level1Source || "规则兜底") + "）</dd>" +
       "<dt>Level_2（稳健型支撑）</dt><dd>" + fmt(res.level2) + "（来源: " + (res.level2Source || "深度寻底") + "）</dd>" +
+      "<dt>远期宏观参考（不作Level_2）</dt><dd>" + fmt(res.macroRef) + "</dd>" +
       "<dt>主力成本位</dt><dd>开盘=" + fmt(res.moneyOpen) + "，最低=" + fmt(res.moneyLow) + "</dd>" +
       "<dt>缺口支撑</dt><dd>" + fmt(res.gapSupport) + (res.gapSupport == null ? "" : (res.gapStrong ? "（3日未补，强）" : "（一般）")) + "</dd>" +
       "<dt>均线</dt><dd>MA5=" + fmt(res.ma5) + "，MA10=" + fmt(res.ma10) + "，MA20=" + fmt(res.ma20) + "，MA60=" + fmt(res.ma60) + "</dd>" +
+      "<dt>活跃均线优先</dt><dd>" + (res.activeMA ? "已启用（股价在MA5/10/20上方）" : "未启用") + "</dd>" +
       "<dt>平台识别</dt><dd>" + (res.platformOk ? "是" : "否") + "（std(Low)=" + fmt(res.stdLow) + "，平台底=" + fmt(res.platformSupport) + "）</dd>" +
       "<dt>空头过滤</dt><dd>均线空头排列=" + (res.bearAligned ? "是（已屏蔽大阳线支撑）" : "否") + "；股价在MA20/MA60下方=" + (res.belowAllMA ? "是" : "否") + "</dd>" +
       "<dt>扩展支撑（空头）</dt><dd>250日低点=" + fmt(res.yearLowSupport) + "，心理关口=" + fmt(res.psychSupport) + "</dd>" +
+      "<dt>Swing Low(20)</dt><dd>" + fmt(res.swingLow20) + "</dd>" +
+      "<dt>成交额前三锚定低点</dt><dd>" + topAmountText + "</dd>" +
       "<dt>MA20 回踩</dt><dd>" + (res.ma20PullbackSupport != null ? ("有效，支撑=" + fmt(res.ma20PullbackSupport)) : "未触发") + "</dd>" +
       "<dt>上方压力位（非支撑）</dt><dd>Level_1候选: " + p1 + "；Level_2候选: " + p2 + "</dd>" +
       "<dt>情绪监控</dt><dd class=\"" + res.sentClass + "\">" + res.sentiment + "</dd>";
@@ -653,6 +728,7 @@
             high: parseFloat(row[3]),
             low: parseFloat(row[4]),
             volume: parseFloat(row[5]),
+            amount: parseFloat(row[5]),
           });
           const tr = document.createElement("tr");
           const cells = [row[0], symbol, row[1], row[2], row[3], row[4], row[5]];
@@ -701,6 +777,7 @@
             high: parseFloat(p[3]),
             low: parseFloat(p[4]),
             volume: parseFloat(p[5]),
+            amount: parseFloat(p[6]),
           });
           const tr = document.createElement("tr");
           const cells = [p[0], symbol, p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10]];
