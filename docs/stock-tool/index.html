@@ -430,7 +430,7 @@
       moneyLow = null;
     }
     const level1Split = splitLevels(level1Raw);
-    // Level_1 终极顺序：未补缺口 -> 第一条在现价下方均线(MA5/10/20/60) -> 近10日低点
+    // Level_1 终极顺序：未补缺口 -> MA5/10/20 中最接近现价且在下方 -> 近20日最低收盘
     let level1 = null;
     let level1Source = "";
     let recentGap = null;
@@ -448,27 +448,32 @@
         { name: "MA5", value: ma5 },
         { name: "MA10", value: ma10 },
         { name: "MA20", value: ma20 },
-        { name: "MA60", value: ma60 },
       ];
+      let best = null;
       for (let i = 0; i < maOrder.length; i++) {
         if (maOrder[i].value != null && maOrder[i].value < todayClose) {
-          level1 = maOrder[i].value;
-          level1Source = maOrder[i].name;
-          break;
+          if (best == null || maOrder[i].value > best.value) {
+            best = maOrder[i];
+          }
         }
+      }
+      if (best != null) {
+        level1 = best.value;
+        level1Source = best.name;
       }
     }
     if (level1 == null) {
-      const swingLow10 = Math.min.apply(null, low.slice(Math.max(0, n - 10)));
-      level1 = swingLow10;
-      level1Source = "近10日低点";
+      const close20 = close.slice(Math.max(0, n - 20));
+      const swingCloseLow20 = Math.min.apply(null, close20);
+      level1 = swingCloseLow20;
+      level1Source = "近20日最低收盘";
     }
 
     let level2Raw = [
       { name: "平台底", value: platformSupport },
       { name: "MA60", value: ma60 },
       { name: "60日低点", value: Math.min.apply(null, low.slice(Math.max(0, n - 60))) },
-      { name: "120日低点", value: Math.min.apply(null, low.slice(Math.max(0, n - 120))) },
+      { name: "250日低点", value: Math.min.apply(null, low.slice(Math.max(0, n - 250))) },
     ];
     if (belowAllMA) {
       level2Raw.push({ name: "250日低点", value: yearLowSupport });
@@ -483,17 +488,23 @@
       }
     }
     const level2Split = splitLevels(level2Raw);
-    // Level_2 终极兜底：60日低点；若离现价<3%改120日低点；再做整数关口补丁
+    // Level_2 终极兜底：60日低点；若离现价<2%改250日低点；若股价在MA60下方直接用250日低点
     const low60 = Math.min.apply(null, low.slice(Math.max(0, n - 60)));
-    const low120 = Math.min.apply(null, low.slice(Math.max(0, n - 120)));
+    const low250 = Math.min.apply(null, low.slice(Math.max(0, n - 250)));
     let level2 = low60;
-    if (todayClose > 0 && Math.abs(todayClose - low60) / todayClose < 0.03) {
-      level2 = low120;
+    let level2Source = "60日低点";
+    if (ma60 != null && todayClose < ma60) {
+      level2 = low250;
+      level2Source = "股价在MA60下方，切换250日低点";
+    } else if (todayClose > 0 && Math.abs(todayClose - low60) / todayClose < 0.02) {
+      level2 = low250;
+      level2Source = "60日低点过近，切换250日低点";
     }
     // 整数关口补丁：在 ±1% 内有 0.5 刻度关口则强制取整
     const half = Math.round(level2 * 2) / 2;
     if (level2 > 0 && Math.abs(half - level2) / level2 <= 0.01) {
       level2 = half;
+      level2Source += " + 心理关口修正";
     }
     // 进一步保障“支撑必须小于现价”
     if (level2 >= todayClose) {
@@ -522,6 +533,7 @@
       level1: level1,
       level1Source: level1Source,
       level2: level2,
+      level2Source: level2Source,
       level1Pressures: level1Split.pressure,
       level2Pressures: level2Split.pressure,
       platformSupport: platformSupport,
@@ -564,7 +576,7 @@
       : "—";
     supportDl.innerHTML =
       "<dt>Level_1（激进型支撑）</dt><dd>" + fmt(res.level1) + "（来源: " + (res.level1Source || "规则兜底") + "）</dd>" +
-      "<dt>Level_2（稳健型支撑）</dt><dd>" + fmt(res.level2) + "（60/120日低点+整数关口兜底）</dd>" +
+      "<dt>Level_2（稳健型支撑）</dt><dd>" + fmt(res.level2) + "（来源: " + (res.level2Source || "深度寻底") + "）</dd>" +
       "<dt>主力成本位</dt><dd>开盘=" + fmt(res.moneyOpen) + "，最低=" + fmt(res.moneyLow) + "</dd>" +
       "<dt>缺口支撑</dt><dd>" + fmt(res.gapSupport) + (res.gapSupport == null ? "" : (res.gapStrong ? "（3日未补，强）" : "（一般）")) + "</dd>" +
       "<dt>均线</dt><dd>MA5=" + fmt(res.ma5) + "，MA10=" + fmt(res.ma10) + "，MA20=" + fmt(res.ma20) + "，MA60=" + fmt(res.ma60) + "</dd>" +
