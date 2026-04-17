@@ -323,6 +323,9 @@
     const ma60 = rollingMean(close, 60, n - 1);
     const ma20Vol = rollingMean(volume, 20, n - 1);
     const ma20VolPrev = rollingMean(volume, 20, n - 2);
+    const todayClose = close[n - 1];
+    const todayVol = volume[n - 1];
+    const prevVol = volume[n - 2];
 
     // 模块一：20日平台筑底
     const last20Low = low.slice(n - 20);
@@ -368,20 +371,79 @@
     }
 
     // 模块四：MA20 回踩
-    const todayClose = close[n - 1];
-    const todayVol = volume[n - 1];
-    const prevVol = volume[n - 2];
     const nearMA20 = ma20 != null && Math.abs(todayClose - ma20) / ma20 <= 0.01;
     const volShrink = ma20Vol != null && ma20VolPrev != null && todayVol < ma20Vol && todayVol < prevVol;
     const ma20PullbackSupport = nearMA20 && volShrink ? ma20 : null;
 
-    // 输出
-    let level1Gap = todayGapSupport != null ? todayGapSupport : latestGapSupport;
-    if (level1Gap != null && latestGapStrong) level1Gap = level1Gap; // 保留强弱标记用于显示
-    const level1Candidates = [moneyOpen, level1Gap, ma20].filter(function (x) { return x != null; });
-    const level1 = level1Candidates.length ? Math.max.apply(null, level1Candidates) : null;
-    const level2Candidates = [platformSupport, ma60].filter(function (x) { return x != null; });
-    const level2 = level2Candidates.length ? Math.min.apply(null, level2Candidates) : null;
+    // C. 均线空头过滤
+    const bearAligned = ma5 != null && ma10 != null && ma20 != null && ma60 != null && ma5 < ma10 && ma10 < ma20 && ma20 < ma60;
+    const belowAllMA = ma20 != null && ma60 != null && todayClose < ma20 && todayClose < ma60;
+
+    // B. 空头区间扩展支撑：250日低点 + 整数/半整数关口
+    let yearLowSupport = null;
+    if (belowAllMA) {
+      const win = Math.min(250, n);
+      yearLowSupport = Math.min.apply(null, low.slice(n - win));
+    }
+    let psychSupport = null;
+    if (belowAllMA) {
+      psychSupport = Math.floor(todayClose * 2) / 2; // 0.5 档位，如 6.5、6.0
+      if (psychSupport >= todayClose) psychSupport = psychSupport - 0.5;
+    }
+
+    // A. 位置判定：高于现价必须记为压力位
+    function splitLevels(candidates) {
+      const support = [];
+      const pressure = [];
+      for (let i = 0; i < candidates.length; i++) {
+        const it = candidates[i];
+        if (it.value == null || Number.isNaN(it.value)) continue;
+        if (it.value <= todayClose) support.push(it);
+        else pressure.push(it);
+      }
+      return { support: support, pressure: pressure };
+    }
+
+    const level1Gap = todayGapSupport != null ? todayGapSupport : latestGapSupport;
+    let level1Raw = [
+      { name: "大阳线开盘价", value: moneyOpen },
+      { name: "缺口下沿", value: level1Gap },
+      { name: "MA20", value: ma20 },
+    ];
+    // C: 空头排列时，屏蔽模块二
+    if (bearAligned) {
+      level1Raw = [
+        { name: "缺口下沿", value: level1Gap },
+        { name: "MA20", value: ma20 },
+      ];
+      moneyOpen = null;
+      moneyLow = null;
+    }
+    const level1Split = splitLevels(level1Raw);
+    const level1 = level1Split.support.length
+      ? Math.max.apply(null, level1Split.support.map(function (x) { return x.value; }))
+      : null;
+
+    let level2Raw = [
+      { name: "平台底", value: platformSupport },
+      { name: "MA60", value: ma60 },
+    ];
+    if (belowAllMA) {
+      level2Raw.push({ name: "250日低点", value: yearLowSupport });
+      level2Raw.push({ name: "心理关口", value: psychSupport });
+    }
+    // C: 空头排列下，优先仅用缩量平台底；若无再退化到年线/心理位
+    if (bearAligned) {
+      level2Raw = [{ name: "平台底", value: platformSupport }];
+      if (platformSupport == null && belowAllMA) {
+        level2Raw.push({ name: "250日低点", value: yearLowSupport });
+        level2Raw.push({ name: "心理关口", value: psychSupport });
+      }
+    }
+    const level2Split = splitLevels(level2Raw);
+    const level2 = level2Split.support.length
+      ? Math.min.apply(null, level2Split.support.map(function (x) { return x.value; }))
+      : null;
 
     let sentiment = "中性：未触发强趋势模板，观察 Level_1 / Level_2。";
     let sentClass = "";
@@ -403,6 +465,8 @@
       ma20Vol: ma20Vol,
       level1: level1,
       level2: level2,
+      level1Pressures: level1Split.pressure,
+      level2Pressures: level2Split.pressure,
       platformSupport: platformSupport,
       platformOk: platformOk,
       stdLow: stdLow,
@@ -414,6 +478,10 @@
       ma20PullbackSupport: ma20PullbackSupport,
       nearMA20: nearMA20,
       volShrink: volShrink,
+      bearAligned: bearAligned,
+      belowAllMA: belowAllMA,
+      yearLowSupport: yearLowSupport,
+      psychSupport: psychSupport,
       sentiment: sentiment,
       sentClass: sentClass,
       todayClose: todayClose,
@@ -431,6 +499,12 @@
       if (v == null || Number.isNaN(v)) return "—";
       return Number(v).toFixed(4).replace(/\.?0+$/, "");
     }
+    const p1 = res.level1Pressures && res.level1Pressures.length
+      ? res.level1Pressures.map(function (x) { return x.name + "=" + fmt(x.value); }).join("，")
+      : "—";
+    const p2 = res.level2Pressures && res.level2Pressures.length
+      ? res.level2Pressures.map(function (x) { return x.name + "=" + fmt(x.value); }).join("，")
+      : "—";
     supportDl.innerHTML =
       "<dt>Level_1（激进型支撑）</dt><dd>" + fmt(res.level1) + "（max(大阳线开盘, 缺口下沿, MA20)）</dd>" +
       "<dt>Level_2（稳健型支撑）</dt><dd>" + fmt(res.level2) + "（min(平台底, MA60)）</dd>" +
@@ -438,7 +512,10 @@
       "<dt>缺口支撑</dt><dd>" + fmt(res.gapSupport) + (res.gapSupport == null ? "" : (res.gapStrong ? "（3日未补，强）" : "（一般）")) + "</dd>" +
       "<dt>均线</dt><dd>MA5=" + fmt(res.ma5) + "，MA10=" + fmt(res.ma10) + "，MA20=" + fmt(res.ma20) + "，MA60=" + fmt(res.ma60) + "</dd>" +
       "<dt>平台识别</dt><dd>" + (res.platformOk ? "是" : "否") + "（std(Low)=" + fmt(res.stdLow) + "，平台底=" + fmt(res.platformSupport) + "）</dd>" +
+      "<dt>空头过滤</dt><dd>均线空头排列=" + (res.bearAligned ? "是（已屏蔽大阳线支撑）" : "否") + "；股价在MA20/MA60下方=" + (res.belowAllMA ? "是" : "否") + "</dd>" +
+      "<dt>扩展支撑（空头）</dt><dd>250日低点=" + fmt(res.yearLowSupport) + "，心理关口=" + fmt(res.psychSupport) + "</dd>" +
       "<dt>MA20 回踩</dt><dd>" + (res.ma20PullbackSupport != null ? ("有效，支撑=" + fmt(res.ma20PullbackSupport)) : "未触发") + "</dd>" +
+      "<dt>上方压力位（非支撑）</dt><dd>Level_1候选: " + p1 + "；Level_2候选: " + p2 + "</dd>" +
       "<dt>情绪监控</dt><dd class=\"" + res.sentClass + "\">" + res.sentiment + "</dd>";
     supportCard.hidden = false;
   }
