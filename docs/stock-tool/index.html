@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>沪深 A 股历史 K 线（静态页）</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f6f7fb;
+      --card: #fff;
+      --border: #e2e5ec;
+      --text: #1a1d26;
+      --muted: #5c6578;
+      --accent: #2563eb;
+      --err: #b91c1c;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111318;
+        --card: #1a1d24;
+        --border: #2d3340;
+        --text: #eef1f7;
+        --muted: #9aa3b5;
+        --accent: #60a5fa;
+        --err: #f87171;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 1.25rem;
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; }
+    h1 { font-size: 1.35rem; margin: 0 0 0.35rem; font-weight: 650; }
+    h2 { font-size: 1.1rem; margin: 0 0 0.5rem; font-weight: 650; }
+    .sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 1rem; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.1rem;
+      margin-bottom: 1rem;
+    }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.2rem; }
+    .row {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 0.75rem 1rem;
+      align-items: end;
+    }
+    input, select, button {
+      font: inherit;
+      padding: 0.45rem 0.55rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      width: 100%;
+    }
+    button.primary {
+      grid-column: 1 / -1;
+      background: var(--accent);
+      color: #fff;
+      border-color: transparent;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 0.35rem;
+    }
+    button.primary:disabled { opacity: 0.55; cursor: not-allowed; }
+    .links { font-size: 0.85rem; margin-top: 0.75rem; }
+    .links a { color: var(--accent); }
+    #msg { margin: 0.5rem 0; font-size: 0.9rem; white-space: pre-wrap; }
+    #msg.err { color: var(--err); }
+    .table-wrap { overflow: auto; max-height: 62vh; border: 1px solid var(--border); border-radius: 8px; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.82rem; }
+    th, td { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+    th:first-child, td:first-child { text-align: left; position: sticky; left: 0; background: var(--card); z-index: 1; }
+    thead th { position: sticky; top: 0; background: var(--card); z-index: 2; font-weight: 600; }
+    #supportCard dl { margin: 0; font-size: 0.9rem; }
+    #supportCard dt { color: var(--muted); margin-top: 0.45rem; }
+    #supportCard dt:first-child { margin-top: 0; }
+    #supportCard dd { margin: 0.15rem 0 0 0; font-weight: 500; }
+    .sent-bull { color: #15803d; }
+    .sent-bear { color: var(--err); }
+    details { font-size: 0.85rem; color: var(--muted); margin-top: 0.75rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>沪深 A 股历史 K 线</h1>
+    <p class="sub">默认使用<strong>腾讯证券</strong>接口；可切换东方财富。新增「A股自动支撑位识别」：平台筑底、倍量大阳线、跳空缺口、MA20/MA60 融合（按你的规则）。仅供学习研究，不构成投资建议。</p>
+
+    <div class="card">
+      <div class="row">
+        <div>
+          <label for="provider">数据来源</label>
+          <select id="provider">
+            <option value="tencent" selected>腾讯证券（推荐）</option>
+            <option value="eastmoney">东方财富</option>
+          </select>
+        </div>
+        <div>
+          <label for="symbol">股票代码（6 位）</label>
+          <input id="symbol" maxlength="6" value="000001" inputmode="numeric" autocomplete="off" />
+        </div>
+        <div>
+          <label for="period">周期</label>
+          <select id="period">
+            <option value="daily">日 K</option>
+            <option value="weekly">周 K</option>
+            <option value="monthly">月 K</option>
+          </select>
+        </div>
+        <div>
+          <label for="adjust">复权</label>
+          <select id="adjust">
+            <option value="">不复权</option>
+            <option value="qfq">前复权</option>
+            <option value="hfq">后复权</option>
+          </select>
+        </div>
+        <div>
+          <label for="beg">开始日期</label>
+          <input id="beg" maxlength="8" value="20230101" />
+        </div>
+        <div>
+          <label for="end">结束日期</label>
+          <input id="end" maxlength="8" value="20500101" />
+        </div>
+        <button type="button" class="primary" id="go">查询</button>
+      </div>
+      <div class="links">
+        <a id="extlink" href="#" target="_blank" rel="noopener">在行情页打开</a>
+      </div>
+      <p id="msg"></p>
+    </div>
+
+    <div class="card table-wrap" id="tableHost" hidden>
+      <table>
+        <thead id="dynThead"></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+
+    <div class="card" id="supportCard" hidden>
+      <h2>A 股自动支撑位</h2>
+      <p class="sub" style="margin-bottom: 0.75rem;">参数：Nshort=5, Nmid=20, Tvol=2.0, MA5/10/20/60，平台波动阈值 2%，MA20 回踩范围 ±1%。</p>
+      <dl id="supportDl"></dl>
+    </div>
+
+    <details>
+      <summary>说明</summary>
+      <p>支撑算法仅按<strong>日 K</strong>设计（周/月K会跳过）。需要约 65 根以上日线才稳定（MA60 + 近20日平台 + 量能判断）。</p>
+    </details>
+  </div>
+
+  <script>
+(function () {
+  const periodMap = { daily: "101", weekly: "102", monthly: "103" };
+  const adjustMap = { "": "0", qfq: "1", hfq: "2" };
+  const PREFS_KEY = "akStockToolFormPrefs";
+
+  const THEAD_EM =
+    "<tr><th>日期</th><th>代码</th><th>开盘</th><th>收盘</th><th>最高</th><th>最低</th><th>成交量</th><th>成交额</th><th>振幅%</th><th>涨跌幅%</th><th>涨跌额</th><th>换手率%</th></tr>";
+  const THEAD_TX =
+    "<tr><th>日期</th><th>代码</th><th>开盘</th><th>收盘</th><th>最高</th><th>最低</th><th>成交额</th></tr>";
+
+  const $ = (id) => document.getElementById(id);
+  const msg = $("msg");
+  const tbody = $("tbody");
+  const tableHost = $("tableHost");
+  const dynThead = $("dynThead");
+  const go = $("go");
+  const extlink = $("extlink");
+  const supportCard = $("supportCard");
+  const supportDl = $("supportDl");
+
+  function setMsg(text, isErr) {
+    msg.textContent = text;
+    msg.className = isErr ? "err" : "";
+  }
+
+  function hideSupport() {
+    supportCard.hidden = true;
+    supportDl.innerHTML = "";
+  }
+
+  function savePrefs() {
+    const v = {
+      provider: $("provider").value,
+      symbol: $("symbol").value.trim(),
+      period: $("period").value,
+      adjust: $("adjust").value,
+      beg: $("beg").value.trim(),
+      end: $("end").value.trim(),
+    };
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify(v));
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  function loadPrefs() {
+    try {
+      const raw = localStorage.getItem(PREFS_KEY);
+      if (!raw) return;
+      const v = JSON.parse(raw);
+      if (v.provider === "tencent" || v.provider === "eastmoney") $("provider").value = v.provider;
+      if (typeof v.symbol === "string") $("symbol").value = v.symbol;
+      if (v.period === "daily" || v.period === "weekly" || v.period === "monthly") $("period").value = v.period;
+      if (v.adjust === "" || v.adjust === "qfq" || v.adjust === "hfq") $("adjust").value = v.adjust;
+      if (typeof v.beg === "string" && /^\d{8}$/.test(v.beg)) $("beg").value = v.beg;
+      if (typeof v.end === "string" && /^\d{8}$/.test(v.end)) $("end").value = v.end;
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  function toTxSymbol(code) {
+    if (code.startsWith("6")) return "sh" + code;
+    if (code.startsWith("8") || code.startsWith("4") || code.startsWith("92") || code.startsWith("43")) return "bj" + code;
+    return "sz" + code;
+  }
+
+  function eastmoneyQuoteUrl(code) {
+    const pre = code.startsWith("6") ? "sh" : "sz";
+    return "https://quote.eastmoney.com/" + pre + code + ".html";
+  }
+
+  function tencentQuoteUrl(code) {
+    return "https://gu.qq.com/" + toTxSymbol(code) + "/gp";
+  }
+
+  function updateExtLink() {
+    const code = $("symbol").value.trim();
+    const prov = $("provider").value;
+    if (!/^\d{6}$/.test(code)) {
+      extlink.href = "#";
+      return;
+    }
+    extlink.href = prov === "eastmoney" ? eastmoneyQuoteUrl(code) : tencentQuoteUrl(code);
+    extlink.textContent = prov === "eastmoney" ? "在东财行情页打开" : "在腾讯证券页打开";
+  }
+
+  function toCompactFromYmdDash(s) {
+    const d = new Date(String(s).replace(/-/g, "/"));
+    if (Number.isNaN(d.getTime())) return "";
+    const y = d.getFullYear();
+    const mo = String(d.getMonth() + 1).padStart(2, "0");
+    const da = String(d.getDate()).padStart(2, "0");
+    return y + mo + da;
+  }
+
+  function parseTxKlineText(text, txSym, adjust) {
+    const i = text.indexOf("{");
+    if (i < 0) return [];
+    const data = JSON.parse(text.slice(i));
+    const blk = data.data && data.data[txSym];
+    if (!blk) return [];
+    let key = "day";
+    if (adjust === "hfq" && blk.hfqday) key = "hfqday";
+    else if (adjust === "qfq" && blk.qfqday) key = "qfqday";
+    else if (blk.day) key = "day";
+    else if (blk.hfqday) key = "hfqday";
+    else if (blk.qfqday) key = "qfqday";
+    return blk[key] || [];
+  }
+
+  async function fetchTencentYears(txSym, adjust, y0, y1) {
+    const rows = [];
+    const seen = Object.create(null);
+    for (let year = y0; year <= y1; year++) {
+      const params = new URLSearchParams({
+        _var: "kline_day" + adjust + year,
+        param: txSym + ",day," + year + "-01-01," + (year + 1) + "-12-31,640," + adjust,
+        r: String(Math.random()),
+      });
+      const url = "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?" + params.toString();
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("腾讯 HTTP " + res.status);
+      const text = await res.text();
+      const part = parseTxKlineText(text, txSym, adjust);
+      for (let i = 0; i < part.length; i++) {
+        const row = part[i];
+        if (!row || !row.length) continue;
+        const ds = row[0];
+        if (seen[ds]) continue;
+        seen[ds] = 1;
+        rows.push(row);
+      }
+    }
+    rows.sort(function (a, b) {
+      return String(a[0]).localeCompare(String(b[0]));
+    });
+    return rows;
+  }
+
+  function rollingMean(arr, n, idx) {
+    if (idx < n - 1) return null;
+    let sum = 0;
+    for (let i = idx - n + 1; i <= idx; i++) sum += arr[i];
+    return sum / n;
+  }
+
+  function calcAshareSupport(rows) {
+    if (rows.length < 65) return { ok: false, reason: "数据不足：建议至少 65 根日线（当前 " + rows.length + "）。" };
+    const close = rows.map(function (r) { return r.close; });
+    const low = rows.map(function (r) { return r.low; });
+    const high = rows.map(function (r) { return r.high; });
+    const open = rows.map(function (r) { return r.open; });
+    const volume = rows.map(function (r) { return r.volume; });
+    const n = rows.length;
+
+    const ma5 = rollingMean(close, 5, n - 1);
+    const ma10 = rollingMean(close, 10, n - 1);
+    const ma20 = rollingMean(close, 20, n - 1);
+    const ma60 = rollingMean(close, 60, n - 1);
+    const ma20Vol = rollingMean(volume, 20, n - 1);
+    const ma20VolPrev = rollingMean(volume, 20, n - 2);
+
+    // 模块一：20日平台筑底
+    const last20Low = low.slice(n - 20);
+    const mean20Close = close.slice(n - 20).reduce(function (a, b) { return a + b; }, 0) / 20;
+    const mean20Low = last20Low.reduce(function (a, b) { return a + b; }, 0) / 20;
+    let varLow = 0;
+    for (let i = 0; i < last20Low.length; i++) varLow += (last20Low[i] - mean20Low) * (last20Low[i] - mean20Low);
+    const stdLow = Math.sqrt(varLow / last20Low.length);
+    const platformOk = stdLow < mean20Close * 0.02;
+    const platformSupport = platformOk ? Math.min.apply(null, last20Low) : null;
+
+    // 模块二：倍量大阳线
+    let moneyOpen = null;
+    let moneyLow = null;
+    for (let i = 1; i < n; i++) {
+      const ret = close[i - 1] === 0 ? 0 : close[i] / close[i - 1] - 1;
+      const vol20 = rollingMean(volume, 20, i);
+      if (vol20 != null && ret > 0.07 && volume[i] > vol20 * 2.0) {
+        moneyOpen = open[i];
+        moneyLow = low[i];
+      }
+    }
+
+    // 模块三：跳空缺口（向上）
+    let latestGapSupport = null;
+    let latestGapStrong = false;
+    let todayGapSupport = null;
+    for (let i = 1; i < n; i++) {
+      if (low[i] > high[i - 1]) {
+        const gapBase = high[i - 1];
+        if (i === n - 1) todayGapSupport = gapBase;
+        let filled = false;
+        const end3 = Math.min(n - 1, i + 3);
+        for (let j = i + 1; j <= end3; j++) {
+          if (low[j] <= gapBase) {
+            filled = true;
+            break;
+          }
+        }
+        latestGapSupport = gapBase;
+        latestGapStrong = !filled;
+      }
+    }
+
+    // 模块四：MA20 回踩
+    const todayClose = close[n - 1];
+    const todayVol = volume[n - 1];
+    const prevVol = volume[n - 2];
+    const nearMA20 = ma20 != null && Math.abs(todayClose - ma20) / ma20 <= 0.01;
+    const volShrink = ma20Vol != null && ma20VolPrev != null && todayVol < ma20Vol && todayVol < prevVol;
+    const ma20PullbackSupport = nearMA20 && volShrink ? ma20 : null;
+
+    // 输出
+    let level1Gap = todayGapSupport != null ? todayGapSupport : latestGapSupport;
+    if (level1Gap != null && latestGapStrong) level1Gap = level1Gap; // 保留强弱标记用于显示
+    const level1Candidates = [moneyOpen, level1Gap, ma20].filter(function (x) { return x != null; });
+    const level1 = level1Candidates.length ? Math.max.apply(null, level1Candidates) : null;
+    const level2Candidates = [platformSupport, ma60].filter(function (x) { return x != null; });
+    const level2 = level2Candidates.length ? Math.min.apply(null, level2Candidates) : null;
+
+    let sentiment = "中性：未触发强趋势模板，观察 Level_1 / Level_2。";
+    let sentClass = "";
+    const volMildUp = ma20Vol != null && todayVol > ma20Vol * 1.05 && todayVol < ma20Vol * 2.0;
+    if (level1 != null && todayClose > level1 && volMildUp) {
+      sentiment = "上升趋势良好，支撑有效";
+      sentClass = "sent-bull";
+    } else if (level1 != null && todayClose < level1 && volShrink) {
+      sentiment = "缩量回调，关注 Level_2 支撑力度";
+      sentClass = "sent-bear";
+    }
+
+    return {
+      ok: true,
+      ma5: ma5,
+      ma10: ma10,
+      ma20: ma20,
+      ma60: ma60,
+      ma20Vol: ma20Vol,
+      level1: level1,
+      level2: level2,
+      platformSupport: platformSupport,
+      platformOk: platformOk,
+      stdLow: stdLow,
+      moneyOpen: moneyOpen,
+      moneyLow: moneyLow,
+      gapSupport: level1Gap,
+      gapStrong: latestGapStrong,
+      todayGapSupport: todayGapSupport,
+      ma20PullbackSupport: ma20PullbackSupport,
+      nearMA20: nearMA20,
+      volShrink: volShrink,
+      sentiment: sentiment,
+      sentClass: sentClass,
+      todayClose: todayClose,
+      todayVol: todayVol,
+    };
+  }
+
+  function renderSupport(res) {
+    if (!res.ok) {
+      supportDl.innerHTML = "<dt>无法计算</dt><dd>" + res.reason + "</dd>";
+      supportCard.hidden = false;
+      return;
+    }
+    function fmt(v) {
+      if (v == null || Number.isNaN(v)) return "—";
+      return Number(v).toFixed(4).replace(/\.?0+$/, "");
+    }
+    supportDl.innerHTML =
+      "<dt>Level_1（激进型支撑）</dt><dd>" + fmt(res.level1) + "（max(大阳线开盘, 缺口下沿, MA20)）</dd>" +
+      "<dt>Level_2（稳健型支撑）</dt><dd>" + fmt(res.level2) + "（min(平台底, MA60)）</dd>" +
+      "<dt>主力成本位</dt><dd>开盘=" + fmt(res.moneyOpen) + "，最低=" + fmt(res.moneyLow) + "</dd>" +
+      "<dt>缺口支撑</dt><dd>" + fmt(res.gapSupport) + (res.gapSupport == null ? "" : (res.gapStrong ? "（3日未补，强）" : "（一般）")) + "</dd>" +
+      "<dt>均线</dt><dd>MA5=" + fmt(res.ma5) + "，MA10=" + fmt(res.ma10) + "，MA20=" + fmt(res.ma20) + "，MA60=" + fmt(res.ma60) + "</dd>" +
+      "<dt>平台识别</dt><dd>" + (res.platformOk ? "是" : "否") + "（std(Low)=" + fmt(res.stdLow) + "，平台底=" + fmt(res.platformSupport) + "）</dd>" +
+      "<dt>MA20 回踩</dt><dd>" + (res.ma20PullbackSupport != null ? ("有效，支撑=" + fmt(res.ma20PullbackSupport)) : "未触发") + "</dd>" +
+      "<dt>情绪监控</dt><dd class=\"" + res.sentClass + "\">" + res.sentiment + "</dd>";
+    supportCard.hidden = false;
+  }
+
+  loadPrefs();
+  $("symbol").addEventListener("input", updateExtLink);
+  $("provider").addEventListener("change", updateExtLink);
+  updateExtLink();
+
+  async function fetchKline() {
+    const symbol = $("symbol").value.trim();
+    const beg = $("beg").value.trim();
+    const end = $("end").value.trim();
+    const period = $("period").value;
+    const adjust = $("adjust").value;
+    const provider = $("provider").value;
+    savePrefs();
+    hideSupport();
+
+    if (!/^\d{6}$/.test(symbol)) {
+      setMsg("请输入 6 位数字股票代码。", true);
+      tableHost.hidden = true;
+      return;
+    }
+    if (!/^\d{8}$/.test(beg) || !/^\d{8}$/.test(end)) {
+      setMsg("日期须为 8 位数字，例如 20240101。", true);
+      tableHost.hidden = true;
+      return;
+    }
+
+    if (provider === "tencent" && period !== "daily") {
+      setMsg("腾讯源目前仅支持日 K；请改选「日 K」或改用东方财富。", true);
+      tableHost.hidden = true;
+      return;
+    }
+
+    go.disabled = true;
+    setMsg("正在请求…");
+    tableHost.hidden = true;
+    tbody.replaceChildren();
+
+    try {
+      const norm = [];
+      if (provider === "tencent") {
+        dynThead.innerHTML = THEAD_TX;
+        const txSym = toTxSymbol(symbol);
+        const y0 = Math.min(parseInt(beg.slice(0, 4), 10), parseInt(end.slice(0, 4), 10));
+        const y1 = Math.max(parseInt(beg.slice(0, 4), 10), parseInt(end.slice(0, 4), 10));
+        const rows = await fetchTencentYears(txSym, adjust, y0, y1);
+        const frag = document.createDocumentFragment();
+        let cnt = 0;
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i];
+          const compact = toCompactFromYmdDash(row[0]);
+          if (compact && (compact < beg || compact > end)) continue;
+          norm.push({
+            date: row[0],
+            open: parseFloat(row[1]),
+            close: parseFloat(row[2]),
+            high: parseFloat(row[3]),
+            low: parseFloat(row[4]),
+            volume: parseFloat(row[5]),
+          });
+          const tr = document.createElement("tr");
+          const cells = [row[0], symbol, row[1], row[2], row[3], row[4], row[5]];
+          for (let j = 0; j < cells.length; j++) {
+            const td = document.createElement("td");
+            td.textContent = cells[j];
+            tr.appendChild(td);
+          }
+          frag.appendChild(tr);
+          cnt++;
+        }
+        tbody.appendChild(frag);
+        tableHost.hidden = false;
+        setMsg("腾讯源共 " + cnt + " 条（已按日期过滤）。标的 " + txSym);
+      } else {
+        dynThead.innerHTML = THEAD_EM;
+        const market = symbol.startsWith("6") ? "1" : "0";
+        const secid = market + "." + symbol;
+        const params = new URLSearchParams({
+          fields1: "f1,f2,f3,f4,f5,f6",
+          fields2: "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f116",
+          ut: "7eea3edcaed734bea9cbfc24409ed989",
+          klt: periodMap[period],
+          fqt: adjustMap[adjust],
+          secid: secid,
+          beg: beg,
+          end: end,
+        });
+        const url = "https://push2his.eastmoney.com/api/qt/stock/kline/get?" + params.toString();
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        const klines = data && data.data && data.data.klines;
+        if (!klines || !klines.length) {
+          setMsg("未返回数据：请确认代码为沪深京 A 股、日期区间是否合理。", true);
+          return;
+        }
+        const frag = document.createDocumentFragment();
+        for (let i = 0; i < klines.length; i++) {
+          const p = klines[i].split(",");
+          if (p.length < 11) continue;
+          norm.push({
+            date: p[0],
+            open: parseFloat(p[1]),
+            close: parseFloat(p[2]),
+            high: parseFloat(p[3]),
+            low: parseFloat(p[4]),
+            volume: parseFloat(p[5]),
+          });
+          const tr = document.createElement("tr");
+          const cells = [p[0], symbol, p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10]];
+          for (let j = 0; j < cells.length; j++) {
+            const td = document.createElement("td");
+            td.textContent = cells[j];
+            tr.appendChild(td);
+          }
+          frag.appendChild(tr);
+        }
+        tbody.appendChild(frag);
+        tableHost.hidden = false;
+        setMsg("东财源共 " + klines.length + " 条记录。");
+      }
+
+      if (period === "daily") {
+        const valid = norm.filter(function (r) {
+          return Number.isFinite(r.open) && Number.isFinite(r.high) && Number.isFinite(r.low) && Number.isFinite(r.close) && Number.isFinite(r.volume);
+        });
+        renderSupport(calcAshareSupport(valid));
+      } else {
+        renderSupport({ ok: false, reason: "当前为周/月 K，本算法仅对日线运行。" });
+      }
+    } catch (e) {
+      setMsg("请求失败：当前网络可能无法访问所选数据源，可尝试切换「数据来源」或更换网络。", true);
+      hideSupport();
+    } finally {
+      go.disabled = false;
+    }
+  }
+
+  go.addEventListener("click", fetchKline);
+})();
+  </script>
+</body>
+</html>
