@@ -112,7 +112,7 @@ def _rows_from_100ppi(df, symbol_code: str, limit: int) -> list[dict]:
     return rows
 
 
-def build_snapshot(repo_root: Path, symbols: list[str], limit: int) -> dict:
+def build_snapshot(repo_root: Path, symbols: list[str], limit: int, fallback_start_day: str) -> dict:
     repo_root_str = str(repo_root)
     if repo_root_str not in sys.path:
         sys.path.insert(0, repo_root_str)
@@ -137,7 +137,7 @@ def build_snapshot(repo_root: Path, symbols: list[str], limit: int) -> dict:
     if fallback_vars and futures_spot_price_daily is not None:
         try:
             fallback_df = futures_spot_price_daily(
-                start_day="20110104",
+                start_day=fallback_start_day,
                 end_day=datetime.now().strftime("%Y%m%d"),
                 vars_list=fallback_vars,
             )
@@ -202,13 +202,24 @@ def main():
         default="docs/futures-tool/steel_spot_daily.js",
         help="Output js path relative to repository root",
     )
+    parser.add_argument(
+        "--fallback-start-day",
+        type=str,
+        default="20240101",
+        help="Start day for 100ppi fallback pull, format YYYYMMDD",
+    )
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
     output_path = repo_root / args.output
     output_js_path = repo_root / args.output_js
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
-    snapshot = build_snapshot(repo_root=repo_root, symbols=symbols, limit=args.limit)
+    snapshot = build_snapshot(
+        repo_root=repo_root,
+        symbols=symbols,
+        limit=args.limit,
+        fallback_start_day=args.fallback_start_day,
+    )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as f:
