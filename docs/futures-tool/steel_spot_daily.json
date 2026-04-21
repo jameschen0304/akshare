@@ -1,6 +1,6 @@
 {
-  "source": "99qh via akshare snapshot",
-  "generated_at": "2026-04-21T07:33:37.783849+00:00",
+  "source": "99qh primary + 100ppi fallback via akshare snapshot",
+  "generated_at": "2026-04-21T07:38:59.097204+00:00",
   "symbols": {
     "螺纹钢": [
       {
@@ -7511,5 +7511,17 @@
     "锰硅": [],
     "焦炭": [],
     "焦煤": []
-  }
+  },
+  "sources": {
+    "螺纹钢": "99qh",
+    "热轧卷板": "none",
+    "线材": "none",
+    "不锈钢": "none",
+    "硅铁": "none",
+    "锰硅": "none",
+    "焦炭": "none",
+    "焦煤": "none"
+  },
+  "fallback_status": "disabled",
+  "fallback_error": "No module named 'curl_cffi'"
 }
