@@ -39,6 +39,17 @@ FALLBACK_100PPI_MAP = {
     "焦煤": "JM",
 }
 
+SINA_SYMBOL_MAP = {
+    "螺纹钢": "RB0",
+    "热轧卷板": "HC0",
+    "线材": "WR0",
+    "不锈钢": "SS0",
+    "硅铁": "SF0",
+    "锰硅": "SM0",
+    "焦炭": "J0",
+    "焦煤": "JM0",
+}
+
 
 def _load_spot_price_func(repo_root: Path):
     module_path = repo_root / "akshare" / "spot" / "spot_price_qh.py"
@@ -58,6 +69,16 @@ def _load_futures_spot_daily_func(repo_root: Path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.futures_spot_price_daily
+
+
+def _load_sina_daily_func(repo_root: Path):
+    module_path = repo_root / "akshare" / "futures" / "futures_zh_sina.py"
+    spec = importlib.util.spec_from_file_location("futures_zh_sina_mod", str(module_path))
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load module from: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.futures_zh_daily_sina
 
 
 def _to_float_or_none(value):
@@ -112,6 +133,29 @@ def _rows_from_100ppi(df, symbol_code: str, limit: int) -> list[dict]:
     return rows
 
 
+def _compact_ymd(value: str) -> str:
+    s = str(value or "").strip()
+    if not s:
+        return ""
+    return s.replace("-", "").replace("/", "")
+
+
+def _load_sina_close_map(futures_zh_daily_sina, sina_symbol: str) -> dict:
+    out = {}
+    try:
+        df = futures_zh_daily_sina(symbol=sina_symbol)
+    except Exception:
+        return out
+    if df is None or df.empty:
+        return out
+    for _, item in df.iterrows():
+        d = _compact_ymd(item.get("date"))
+        c = _to_float_or_none(item.get("close"))
+        if d and c is not None:
+            out[d] = c
+    return out
+
+
 def build_snapshot(repo_root: Path, symbols: list[str], limit: int, fallback_start_day: str) -> dict:
     repo_root_str = str(repo_root)
     if repo_root_str not in sys.path:
@@ -119,12 +163,20 @@ def build_snapshot(repo_root: Path, symbols: list[str], limit: int, fallback_sta
     spot_price_qh = _load_spot_price_func(repo_root)
     futures_spot_price_daily = None
     fallback_boot_error = None
+    futures_zh_daily_sina = None
+    sina_boot_error = None
     try:
         futures_spot_price_daily = _load_futures_spot_daily_func(repo_root)
     except Exception as e:
         fallback_boot_error = e
+    try:
+        futures_zh_daily_sina = _load_sina_daily_func(repo_root)
+    except Exception as e:
+        sina_boot_error = e
     output_symbols = {}
     source_map = {}
+    futures_source_map = {}
+    sina_close_cache = {}
 
     fallback_vars = sorted(
         {
@@ -162,14 +214,28 @@ def build_snapshot(repo_root: Path, symbols: list[str], limit: int, fallback_sta
             )
             if rows:
                 src = "100ppi"
+        sina_src = "none"
+        if rows and futures_zh_daily_sina is not None and symbol in SINA_SYMBOL_MAP:
+            sina_symbol = SINA_SYMBOL_MAP[symbol]
+            if sina_symbol not in sina_close_cache:
+                sina_close_cache[sina_symbol] = _load_sina_close_map(futures_zh_daily_sina, sina_symbol)
+            close_map = sina_close_cache[sina_symbol]
+            if close_map:
+                for row in rows:
+                    d8 = _compact_ymd(row.get("date"))
+                    if d8 in close_map:
+                        row["fp"] = close_map[d8]
+                sina_src = "sina"
         output_symbols[symbol] = rows
         source_map[symbol] = src
+        futures_source_map[symbol] = sina_src
 
     out = {
         "source": "99qh primary + 100ppi fallback via akshare snapshot",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "symbols": output_symbols,
         "sources": source_map,
+        "futures_price_source": futures_source_map,
     }
     if fallback_boot_error is not None:
         out["fallback_status"] = "disabled"
@@ -178,6 +244,13 @@ def build_snapshot(repo_root: Path, symbols: list[str], limit: int, fallback_sta
         out["fallback_status"] = "disabled"
     else:
         out["fallback_status"] = "enabled"
+    if sina_boot_error is not None:
+        out["sina_status"] = "disabled"
+        out["sina_error"] = str(sina_boot_error)
+    elif futures_zh_daily_sina is None:
+        out["sina_status"] = "disabled"
+    else:
+        out["sina_status"] = "enabled"
     return out
 
 
