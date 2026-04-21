@@ -59,6 +59,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+web = ["streamlit>=1.28.0"]
 full = ["akqmt"]
 qmt = ["akqmt"]
 dev = [

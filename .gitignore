@@ -1,3 +1,7 @@
+# Local bundle used only to push standalone GitHub Pages repo (not part of AKShare)
+stock-pages-bundle/
+futures-pages-bundle/
+
 # --- Python Core ---
 __pycache__/
 *.py[cod]
