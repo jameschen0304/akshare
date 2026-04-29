@@ -486,6 +486,17 @@
     return t;
   }
 
+  // 钢材现货快照的 date 字段历史上存在两种格式：
+  // - YYYY-MM-DD
+  // - YYYYMMDD
+  // 前端筛选必须统一到同一种格式再做比较，否则会出现“只到 2025-12-31”的现象。
+  function normalizeSteelDate8(s) {
+    const t = String(s || "").trim();
+    if (/^\d{8}$/.test(t)) return t;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t.replace(/-/g, "");
+    return "";
+  }
+
   function fmtBasis(v) {
     if (v == null || Number.isNaN(v)) return "";
     return Number(v).toFixed(2).replace(/\.?0+$/, "");
@@ -859,10 +870,10 @@
 
   async function runSteelQuery() {
     const variety = $("steelVariety").value;
-    const beg = normalizeDateDash($("steelBeg").value);
-    const end = normalizeDateDash($("steelEnd").value);
-    if (!beg || !end) {
-      setSteelMsg("日期格式需为 YYYY-MM-DD。", true);
+    const beg8 = normalizeSteelDate8($("steelBeg").value);
+    const end8 = normalizeSteelDate8($("steelEnd").value);
+    if (!beg8 || !end8) {
+      setSteelMsg("日期格式需为 YYYY-MM-DD 或 YYYYMMDD。", true);
       steelTableHost.hidden = true;
       return;
     }
@@ -874,7 +885,9 @@
       const symbols = await loadSteelSnapshot();
       const allRows = symbols[variety] || [];
       const rows = allRows.filter(function (r) {
-        return r && r.date >= beg && r.date <= end;
+        if (!r) return false;
+        const d8 = normalizeSteelDate8(r.date);
+        return d8 && d8 >= beg8 && d8 <= end8;
       });
       if (!allRows.length) {
         setSteelMsg("该品种暂无快照数据。", true);
