@@ -1,0 +1,65 @@
+# Sync docs/futures-tool static files to the GitHub Pages repo that serves
+# https://jameschen0304.github.io/akshare-futures-tool/
+#
+# Setup (one-time, on fork jameschen0304/akshare):
+# 1. Create a fine-grained PAT with Contents: Read+Write on repo jameschen0304/akshare-futures-tool
+# 2. In this repo: Settings → Secrets and variables → Actions → New repository secret
+#    Name:  PAGES_SYNC_TOKEN
+#    Value: <the PAT>
+#
+# After that, any push to main that touches docs/futures-tool/* will auto-commit + push to Pages.
+
+name: Sync futures tool to Pages repo
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/futures-tool/**"
+  workflow_dispatch:
+
+concurrency:
+  group: sync-futures-tool-pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    # Avoid running (or failing) on unrelated forks / upstream when this file is merged.
+    # Skip until PAGES_SYNC_TOKEN is configured (otherwise checkout of the Pages repo fails).
+    if: github.repository == 'jameschen0304/akshare' && secrets.PAGES_SYNC_TOKEN != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout akshare
+        uses: actions/checkout@v6
+
+      - name: Checkout Pages repository
+        uses: actions/checkout@v6
+        with:
+          repository: jameschen0304/akshare-futures-tool
+          path: pages
+          token: ${{ secrets.PAGES_SYNC_TOKEN }}
+
+      - name: Copy static assets
+        run: |
+          set -euo pipefail
+          cp -f docs/futures-tool/index.html pages/index.html
+          cp -f docs/futures-tool/steel_spot_daily.js pages/steel_spot_daily.js
+          cp -f docs/futures-tool/steel_spot_daily.json pages/steel_spot_daily.json
+
+      - name: Commit and push if changed
+        run: |
+          set -euo pipefail
+          cd pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html steel_spot_daily.js steel_spot_daily.json
+          if git diff --staged --quiet; then
+            echo "No changes to publish."
+            exit 0
+          fi
+          git commit -m "chore: sync futures-tool from akshare (${GITHUB_SHA:0:7})"
+          git push
