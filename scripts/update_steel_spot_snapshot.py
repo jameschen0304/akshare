@@ -91,15 +91,59 @@ def _to_float_or_none(value):
     return v
 
 
+def _normalize_row_date_iso(value) -> str:
+    """
+    Normalize snapshot row date to YYYY-MM-DD.
+
+    The futures-tool static page historically compared ISO input dates (YYYY-MM-DD)
+    against snapshot dates; mixed YYYYMMDD vs YYYY-MM-DD breaks lexicographic filters
+    and truncates results around year boundaries. Always emit ISO dates.
+    """
+    if value is None:
+        return ""
+    if hasattr(value, "strftime"):
+        try:
+            return value.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    s = str(value).strip()
+    if not s:
+        return ""
+    s = s.replace("/", "-")
+    if len(s) == 10 and s[4] == "-" and s[7] == "-" and s[:4].isdigit():
+        return s
+    comp = "".join(c for c in s if c.isdigit())
+    if len(comp) == 8:
+        return f"{comp[:4]}-{comp[4:6]}-{comp[6:8]}"
+    return ""
+
+
+def normalize_snapshot_dates(snapshot: dict) -> None:
+    symbols = snapshot.get("symbols")
+    if not isinstance(symbols, dict):
+        return
+    for rows in symbols.values():
+        if not isinstance(rows, list):
+            continue
+        for r in rows:
+            if isinstance(r, dict) and "date" in r:
+                iso = _normalize_row_date_iso(r["date"])
+                if iso:
+                    r["date"] = iso
+
+
 def _rows_from_99qh(df, limit: int) -> list[dict]:
     rows = []
     if df is None or df.empty:
         return rows
     df = df.sort_values("日期").tail(limit)
     for _, item in df.iterrows():
+        d_iso = _normalize_row_date_iso(item["日期"])
+        if not d_iso:
+            continue
         rows.append(
             {
-                "date": str(item["日期"]),
+                "date": d_iso,
                 "fp": _to_float_or_none(item["期货收盘价"]),
                 "sp": _to_float_or_none(item["现货价格"]),
             }
@@ -123,9 +167,12 @@ def _rows_from_100ppi(df, symbol_code: str, limit: int) -> list[dict]:
     part = part.sort_values("date").tail(limit)
 
     for _, item in part.iterrows():
+        d_iso = _normalize_row_date_iso(item["date"])
+        if not d_iso:
+            continue
         rows.append(
             {
-                "date": item["date"],
+                "date": d_iso,
                 "fp": _to_float_or_none(item[fp_col]) if fp_col else None,
                 "sp": _to_float_or_none(item["spot_price"]),
             }
@@ -281,11 +328,32 @@ def main():
         default="20240101",
         help="Start day for 100ppi fallback pull, format YYYYMMDD",
     )
+    parser.add_argument(
+        "--normalize-dates-only",
+        action="store_true",
+        help="Rewrite existing snapshot JSON/JS: coerce all row dates to YYYY-MM-DD (no network).",
+    )
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
     output_path = repo_root / args.output
     output_js_path = repo_root / args.output_js
+
+    if args.normalize_dates_only:
+        snapshot = json.loads(output_path.read_text(encoding="utf-8"))
+        normalize_snapshot_dates(snapshot)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as f:
+            json.dump(snapshot, f, ensure_ascii=False, indent=2)
+        output_js_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_js_path.open("w", encoding="utf-8") as f:
+            f.write("window.__steelSpotSnapshot = ")
+            json.dump(snapshot, f, ensure_ascii=False, indent=2)
+            f.write(";\n")
+        print("Normalized dates in:", output_path)
+        print("Normalized dates in:", output_js_path)
+        return
+
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
     snapshot = build_snapshot(
         repo_root=repo_root,
