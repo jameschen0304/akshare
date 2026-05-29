@@ -59,7 +59,7 @@ _lock = threading.Lock()
 class ScanRequest(BaseModel):
     pe_min: float = Field(5, ge=0)
     pe_max: float = Field(25, ge=0)
-    periods: int = Field(6, ge=2, le=12)
+    periods: int = Field(8, ge=2, le=12)
     limit: int = Field(80, ge=0, le=6000)
     max_workers: int = Field(6, ge=1, le=16)
     apply_hard_rules: bool = Field(

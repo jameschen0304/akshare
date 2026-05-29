@@ -70,7 +70,7 @@ SEMI_ANNUAL_SUFFIXES = ("-06-30", "-12-31")
 class ScanConfig:
     pe_min: float = 5.0
     pe_max: float = 25.0
-    periods: int = 6  # ~3 years of semi-annual + annual
+    periods: int = 8  # ~4 years of semi-annual + annual
     max_workers: int = 6
     request_delay: float = 0.15
     limit: int = 0  # 0 = no limit
