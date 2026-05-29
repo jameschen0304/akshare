@@ -20,11 +20,13 @@ python app.py
 
 浏览器打开：<http://127.0.0.1:8765>
 
-## GitHub Pages（在线页面，打开即可扫描）
+## GitHub Pages + Render（推荐在线方案）
 
-- 页面地址：<https://jameschen0304.github.io/akshare/>
-- 扫描在**浏览器内**完成（`docs/screener-core.js`），无需 Render 后端
-- 推送后 GitHub Actions 自动发布（Settings → Pages → Source 选 **GitHub Actions**）
+- 前端：<https://jameschen0304.github.io/akshare-stock-screener/>
+- 财报后端（Render，一键部署）：  
+  [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/jameschen0304/akshare)  
+  详细步骤见 [docs/stock-screener/RENDER_DEPLOY.md](../../docs/stock-screener/RENDER_DEPLOY.md)
+- 未部署 Render 时，浏览器用 Service Worker 代理财报（易失败）；部署后 Pages 会自动连云端 API
 
 若遇代理导致请求失败，PowerShell 可先执行：
 
