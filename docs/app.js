@@ -1,12 +1,6 @@
-let currentJobId = null;
-let pollTimer = null;
+let scanState = null;
+let stopScan = false;
 let lastDetails = [];
-
-const API_BASE = String(window.SCREENER_API_BASE ?? "").replace(/\/$/, "");
-
-function apiUrl(path) {
-  return `${API_BASE}${path}`;
-}
 
 const fmtNum = (n) => {
   if (n == null || Number.isNaN(n)) return "—";
@@ -24,20 +18,6 @@ const fmtPct = (v) => {
 
 const el = (id) => document.getElementById(id);
 
-async function checkApiReady() {
-  if (!API_BASE) {
-    const banner = el("apiBanner");
-    if (banner) banner.hidden = false;
-    return false;
-  }
-  try {
-    const res = await fetch(apiUrl("/api/health"));
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
 function readForm() {
   const f = el("scanForm");
   const fd = new FormData(f);
@@ -50,75 +30,14 @@ function readForm() {
     min_current_ratio: Number(fd.get("min_current_ratio")),
     revenue_growth_years: Number(fd.get("revenue_growth_years")),
     apply_hard_rules: f.querySelector('[name="apply_hard_rules"]').checked,
+    request_delay: 0.25,
   };
 }
 
-async function startScan() {
-  if (!API_BASE) {
-    el("progressPanel").hidden = false;
-    el("progressText").textContent = "未配置 API 地址，请编辑 docs/config.js";
-    return;
-  }
-
-  el("btnStart").disabled = true;
-  el("btnExport").disabled = true;
-  el("progressPanel").hidden = false;
-  el("progressFill").style.width = "0%";
-  el("progressText").textContent = "正在启动…";
-  clearTables();
-
-  try {
-    const res = await fetch(apiUrl("/api/scan/start"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(readForm()),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || res.statusText);
-    }
-    const data = await res.json();
-    currentJobId = data.job_id;
-    pollTimer = setInterval(pollStatus, 1200);
-    pollStatus();
-  } catch (e) {
-    el("progressText").textContent = "启动失败: " + e.message;
-    el("btnStart").disabled = false;
-  }
-}
-
-async function pollStatus() {
-  if (!currentJobId) return;
-  try {
-    const res = await fetch(apiUrl(`/api/scan/${currentJobId}/status`));
-    const st = await res.json();
-    el("progressFill").style.width = st.percent + "%";
-    el("progressText").textContent = `${st.message} (${st.done}/${st.total}，命中 ${st.passed})`;
-
-    if (st.status === "done" || st.status === "error") {
-      clearInterval(pollTimer);
-      pollTimer = null;
-      el("btnStart").disabled = false;
-      if (st.status === "error") {
-        el("progressText").textContent = "错误: " + (st.error || "未知");
-        return;
-      }
-      await loadResults();
-      el("btnExport").disabled = false;
-    } else if (st.status === "running" && st.passed > 0) {
-      await loadResults();
-    }
-  } catch (e) {
-    el("progressText").textContent = "轮询失败: " + e.message;
-  }
-}
-
-async function loadResults() {
-  const res = await fetch(apiUrl(`/api/scan/${currentJobId}/results`));
-  const data = await res.json();
-  lastDetails = data.details || [];
-  renderSummary(data.summary || []);
-  el("resultCount").textContent = String(data.count || 0);
+function updateProgress(state) {
+  const pct = state.total ? Math.round((100 * state.done) / state.total) : 0;
+  el("progressFill").style.width = pct + "%";
+  el("progressText").textContent = `${state.message} (${state.done}/${state.total}，命中 ${state.passed})`;
 }
 
 function clearTables() {
@@ -182,11 +101,54 @@ function showDetail(code) {
   el("detailPanel").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+async function startScan() {
+  if (!window.ScreenerCore) {
+    el("progressPanel").hidden = false;
+    el("progressText").textContent = "核心脚本未加载";
+    return;
+  }
+
+  stopScan = false;
+  el("btnStart").disabled = true;
+  el("btnExport").disabled = true;
+  el("progressPanel").hidden = false;
+  el("progressFill").style.width = "0%";
+  el("progressText").textContent = "正在启动（浏览器直连东方财富）…";
+  clearTables();
+
+  const cfg = readForm();
+
+  try {
+    scanState = await ScreenerCore.runScan(cfg, {
+      shouldStop: () => stopScan,
+      onProgress: (state) => {
+        updateProgress(state);
+        if (state.status === "error") {
+          el("progressText").textContent = "错误: " + (state.error || "未知");
+        }
+      },
+      onPartial: (state) => {
+        lastDetails = state.results;
+        renderSummary(state.summary);
+        el("resultCount").textContent = String(state.passed);
+      },
+    });
+
+    lastDetails = scanState.results || [];
+    renderSummary(scanState.summary || []);
+    el("resultCount").textContent = String(scanState.passed || 0);
+    if (scanState.passed > 0) el("btnExport").disabled = false;
+  } catch (e) {
+    el("progressText").textContent = "扫描失败: " + e.message;
+  } finally {
+    el("btnStart").disabled = false;
+  }
+}
+
 function exportCsv() {
-  if (!currentJobId || !API_BASE) return;
-  window.location.href = apiUrl(`/api/scan/${currentJobId}/export`);
+  if (!scanState?.results?.length) return;
+  ScreenerCore.exportCsv(scanState.results);
 }
 
 el("btnStart").addEventListener("click", startScan);
 el("btnExport").addEventListener("click", exportCsv);
-checkApiReady();

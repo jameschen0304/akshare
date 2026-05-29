@@ -20,17 +20,11 @@ python app.py
 
 浏览器打开：<http://127.0.0.1:8765>
 
-## GitHub Pages（在线页面）
+## GitHub Pages（在线页面，打开即可扫描）
 
 - 页面地址：<https://jameschen0304.github.io/akshare/>
-- Pages 只托管前端；扫描功能需部署 API（推荐 Render，见仓库根目录 `render.yaml`）
-- 部署 API 后，在 `docs/config.js` 设置：
-
-```javascript
-window.SCREENER_API_BASE = "https://你的服务.onrender.com";
-```
-
-推送后 GitHub Actions 会自动发布 Pages（仓库 Settings → Pages → Source 选 **GitHub Actions**）。
+- 扫描在**浏览器内**完成（`docs/screener-core.js`），无需 Render 后端
+- 推送后 GitHub Actions 自动发布（Settings → Pages → Source 选 **GitHub Actions**）
 
 若遇代理导致请求失败，PowerShell 可先执行：
 
