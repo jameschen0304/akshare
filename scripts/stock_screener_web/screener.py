@@ -204,17 +204,28 @@ def _fetch_market_cap_em(code: str) -> Optional[float]:
             r = session.get(url, params=params, timeout=15)
             r.raise_for_status()
             data = r.json().get("data") or {}
-        cap = pd.to_numeric(data.get("f116"), errors="coerce")
-        if pd.isna(cap) or cap <= 0:
-            return None
-        return float(cap)
+        cap = normalize_market_cap(data.get("f116"))
+        return cap
     except Exception:
         return None
 
 
+def normalize_market_cap(cap: Any) -> Optional[float]:
+    """行情列表总市值多为万元，单股 f116 为元。"""
+    if cap is None or pd.isna(cap):
+        return None
+    v = float(cap)
+    if v <= 0:
+        return None
+    if v < 1e10:
+        return v * 10000.0
+    return v
+
+
 def resolve_market_cap(code: str, market_cap: Any) -> Optional[float]:
-    if market_cap is not None and not pd.isna(market_cap) and float(market_cap) > 0:
-        return float(market_cap)
+    cap = normalize_market_cap(market_cap)
+    if cap is not None:
+        return cap
     return _fetch_market_cap_em(code)
 
 
@@ -280,8 +291,10 @@ def build_period_metrics(
     return pd.DataFrame(rows)
 
 
-def annual_revenue_increasing(metrics: pd.DataFrame, years: int) -> bool:
-    annual = metrics[metrics["report_date"].str.endswith("-12-31")].sort_values(
+def annual_revenue_increasing(profit_df: pd.DataFrame, years: int) -> bool:
+    if profit_df.empty or "revenue" not in profit_df.columns:
+        return False
+    annual = profit_df[profit_df["report_date"].str.endswith("-12-31")].sort_values(
         "report_date"
     )
     if len(annual) < years:
@@ -294,7 +307,7 @@ def annual_revenue_increasing(metrics: pd.DataFrame, years: int) -> bool:
 
 
 def passes_hard_rules(
-    metrics: pd.DataFrame, cfg: ScanConfig
+    metrics: pd.DataFrame, profit_df: pd.DataFrame, cfg: ScanConfig
 ) -> tuple[bool, list[str]]:
     reasons: list[str] = []
     if metrics.empty:
@@ -303,8 +316,14 @@ def passes_hard_rules(
     cr = latest.get("current_ratio")
     if pd.isna(cr) or float(cr) < cfg.min_current_ratio:
         reasons.append(f"流动比率<{cfg.min_current_ratio}")
-    if not annual_revenue_increasing(metrics, cfg.revenue_growth_years):
-        reasons.append(f"最近{cfg.revenue_growth_years}个年报收入未连增")
+    need_years = cfg.revenue_growth_years
+    max_from_periods = max(2, (cfg.periods or 6) // 2)
+    if need_years > max_from_periods:
+        reasons.append(
+            f"收入连增需{need_years}个年报，请把「展示报告期数」调到至少 {need_years * 2} 或降低连增年数"
+        )
+    elif not annual_revenue_increasing(profit_df, need_years):
+        reasons.append(f"最近{need_years}个年报收入未连增")
     return len(reasons) == 0, reasons
 
 
@@ -358,7 +377,7 @@ def analyze_stock(
     if metrics.empty:
         return None
 
-    hard_ok, hard_reasons = passes_hard_rules(metrics, cfg)
+    hard_ok, hard_reasons = passes_hard_rules(metrics, profit_df, cfg)
     if cfg.apply_hard_rules and not hard_ok:
         return None
 
