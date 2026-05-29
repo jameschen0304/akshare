@@ -276,12 +276,19 @@ async function runBrowserScanLoop() {
 }
 
 async function prepareBrowserScan() {
-  if (apiBase()) return;
-  el("progressText").textContent = "正在启用浏览器代理（Service Worker）…";
-  try {
-    await window.__screenerSwReady;
-  } catch (_) {
-    /* ignore */
+  if (apiBase()) {
+    el("apiBanner").innerHTML =
+      "已连接云端后端 <code>" +
+      apiBase() +
+      "</code>（财报由服务器拉取，更稳定）。";
+    return;
+  }
+  el("progressText").textContent = "正在初始化财报代理…";
+  const st = await (window.initScreenerRuntime
+    ? window.initScreenerRuntime()
+    : window.__screenerInit);
+  if (st && st.ok === false) {
+    throw new Error(st.reason || "财报代理未就绪");
   }
   if (
     navigator.serviceWorker &&
@@ -292,9 +299,21 @@ async function prepareBrowserScan() {
     location.reload();
     return;
   }
+  if (navigator.serviceWorker && !navigator.serviceWorker.controller) {
+    throw new Error("财报代理未激活，请按 Ctrl+F5 刷新后再扫描");
+  }
+  el("apiBanner").textContent =
+    "已启用浏览器财报代理（Service Worker）。若仍失败请 Ctrl+F5，或运行 run_local.bat。";
 }
 
 async function startScan() {
+  if (window.__screenerInit && !apiBase()) {
+    try {
+      await window.__screenerInit;
+    } catch (_) {
+      /* prepareBrowserScan will retry */
+    }
+  }
   if (apiBase()) {
     stopScan = false;
     el("btnStart").disabled = true;
@@ -332,6 +351,9 @@ async function startScan() {
     await runBrowserScanLoop();
   } catch (e) {
     el("progressText").textContent = "扫描失败: " + e.message;
+    el("btnStart").disabled = false;
+    setScanningUi(false);
+    return;
   } finally {
     continuousScan = false;
     setScanningUi(false);
