@@ -31,7 +31,10 @@ from screener import (
     ScanConfig,
     ScanJob,
     ScanProgress,
+    default_max_workers_cap,
+    default_request_delay,
     flatten_export_rows,
+    is_cloud_deploy,
     run_scan,
 )
 
@@ -71,7 +74,12 @@ class ScanRequest(BaseModel):
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "cloud": is_cloud_deploy(),
+        "max_workers_cap": default_max_workers_cap(),
+        "request_delay": default_request_delay(),
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -86,12 +94,14 @@ def start_scan(req: ScanRequest) -> dict:
         raise HTTPException(400, "市盈率下限不能大于上限")
 
     job_id = uuid.uuid4().hex[:12]
+    worker_cap = default_max_workers_cap()
     cfg = ScanConfig(
         pe_min=req.pe_min,
         pe_max=req.pe_max,
         periods=req.periods,
         limit=req.limit,
-        max_workers=req.max_workers,
+        max_workers=min(req.max_workers, worker_cap),
+        request_delay=default_request_delay(),
         apply_hard_rules=req.apply_hard_rules,
         min_current_ratio=req.min_current_ratio,
         revenue_growth_years=req.revenue_growth_years,

@@ -29,17 +29,84 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 import requests as _requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 _orig_session = _requests.Session
+_orig_request_get = _requests.get
+
+_EM_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+_RETRYABLE_EXC = (
+    _requests.exceptions.ConnectionError,
+    _requests.exceptions.ChunkedEncodingError,
+    _requests.exceptions.Timeout,
+)
+
+
+def _eastmoney_headers(url: str, headers: dict | None) -> dict:
+    h = dict(headers or {})
+    if "eastmoney.com" not in str(url):
+        return h
+    h.setdefault("User-Agent", _EM_UA)
+    if "emweb.securities" in str(url):
+        h.setdefault("Referer", "https://emweb.securities.eastmoney.com/")
+    else:
+        h.setdefault("Referer", "https://quote.eastmoney.com/")
+    h.setdefault("Accept", "application/json, text/plain, */*")
+    return h
+
+
+def _retry_em_request(fn, *args, retries: int = 5, **kwargs):
+    last_err: Exception | None = None
+    for attempt in range(retries):
+        try:
+            return fn(*args, **kwargs)
+        except _RETRYABLE_EXC as exc:
+            last_err = exc
+            if attempt < retries - 1:
+                time.sleep(0.7 * (2**attempt))
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError("retry_em_request failed")
+
+
+def _patched_get(url, *args, **kwargs):
+    kwargs.setdefault("timeout", 20)
+    kwargs["headers"] = _eastmoney_headers(url, kwargs.get("headers"))
+
+    def _do():
+        return _orig_request_get(url, *args, **kwargs)
+
+    return _retry_em_request(_do)
 
 
 class _NoProxySession(_orig_session):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.trust_env = False
+        retry = Retry(
+            total=4,
+            connect=4,
+            read=4,
+            backoff_factor=0.8,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset(["GET", "HEAD"]),
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        self.mount("https://", adapter)
+        self.mount("http://", adapter)
+
+    def request(self, method, url, *args, **kwargs):
+        kwargs.setdefault("timeout", 20)
+        kwargs["headers"] = _eastmoney_headers(url, kwargs.get("headers"))
+        return super().request(method, url, *args, **kwargs)
 
 
 _requests.Session = _NoProxySession
+_requests.get = _patched_get
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Optional
@@ -64,6 +131,24 @@ BALANCE_FIELDS = {
     "current_liab": "TOTAL_CURRENT_LIAB",
 }
 SEMI_ANNUAL_SUFFIXES = ("-06-30", "-12-31")
+
+
+def is_cloud_deploy() -> bool:
+    return os.environ.get("RENDER") == "true" or os.environ.get(
+        "SCREENER_CLOUD"
+    ) == "1"
+
+
+def default_request_delay() -> float:
+    if os.environ.get("SCREENER_REQUEST_DELAY"):
+        return float(os.environ["SCREENER_REQUEST_DELAY"])
+    return 0.6 if is_cloud_deploy() else 0.15
+
+
+def default_max_workers_cap() -> int:
+    if os.environ.get("SCREENER_MAX_WORKERS"):
+        return int(os.environ["SCREENER_MAX_WORKERS"])
+    return 3 if is_cloud_deploy() else 6
 
 
 @dataclass
@@ -127,30 +212,44 @@ def _universe_from_code_list() -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
+def _load_universe_from_spot() -> pd.DataFrame:
+    spot = stock_zh_a_spot_em()
+    spot = spot.rename(
+        columns={
+            "代码": "code",
+            "名称": "name",
+            "总市值": "market_cap",
+            "最新价": "price",
+        }
+    )
+    spot["code"] = spot["code"].astype(str).str.zfill(6)
+    spot["market_cap"] = pd.to_numeric(spot["market_cap"], errors="coerce")
+    mask = (
+        spot["market_cap"].notna()
+        & (spot["market_cap"] > 0)
+        & ~spot["name"].map(is_st_stock)
+        & ~spot["code"].map(is_star_market)
+    )
+    universe = spot.loc[mask, ["code", "name", "market_cap", "price"]].copy()
+    universe["em_symbol"] = universe["code"].map(to_em_symbol)
+    return universe.reset_index(drop=True)
+
+
 def load_universe() -> pd.DataFrame:
-    try:
-        spot = stock_zh_a_spot_em()
-        spot = spot.rename(
-            columns={
-                "代码": "code",
-                "名称": "name",
-                "总市值": "market_cap",
-                "最新价": "price",
-            }
-        )
-        spot["code"] = spot["code"].astype(str).str.zfill(6)
-        spot["market_cap"] = pd.to_numeric(spot["market_cap"], errors="coerce")
-        mask = (
-            spot["market_cap"].notna()
-            & (spot["market_cap"] > 0)
-            & ~spot["name"].map(is_st_stock)
-            & ~spot["code"].map(is_star_market)
-        )
-        universe = spot.loc[mask, ["code", "name", "market_cap", "price"]].copy()
-        universe["em_symbol"] = universe["code"].map(to_em_symbol)
-        return universe.reset_index(drop=True)
-    except Exception:
-        return _universe_from_code_list()
+    last_err: Exception | None = None
+    for attempt in range(4):
+        try:
+            return _load_universe_from_spot()
+        except Exception as exc:
+            last_err = exc
+            time.sleep(1.2 * (attempt + 1))
+    for attempt in range(3):
+        try:
+            return _universe_from_code_list()
+        except Exception as exc:
+            last_err = exc
+            time.sleep(1.2 * (attempt + 1))
+    raise last_err or RuntimeError("加载股票池失败")
 
 
 def _pick_report_row(df: pd.DataFrame, suffix: str, year: int) -> Optional[pd.Series]:
@@ -201,7 +300,9 @@ def _fetch_market_cap_em(code: str) -> Optional[float]:
     }
     try:
         with _NoProxySession() as session:
-            r = session.get(url, params=params, timeout=15)
+            r = _retry_em_request(
+                session.get, url, params=params, timeout=20
+            )
             r.raise_for_status()
             data = r.json().get("data") or {}
         cap = normalize_market_cap(data.get("f116"))
@@ -322,7 +423,7 @@ def passes_hard_rules(
 
 
 def _extract_profit(em_symbol: str) -> pd.DataFrame:
-    raw = stock_profit_sheet_by_report_em(symbol=em_symbol)
+    raw = _retry_em_request(stock_profit_sheet_by_report_em, symbol=em_symbol)
     if raw.empty:
         return pd.DataFrame()
     df = pd.DataFrame()
@@ -345,7 +446,7 @@ def _extract_profit(em_symbol: str) -> pd.DataFrame:
 
 
 def _extract_balance(em_symbol: str) -> pd.DataFrame:
-    raw = stock_balance_sheet_by_report_em(symbol=em_symbol)
+    raw = _retry_em_request(stock_balance_sheet_by_report_em, symbol=em_symbol)
     if raw.empty:
         return pd.DataFrame()
     df = pd.DataFrame()
@@ -360,7 +461,7 @@ def _extract_balance(em_symbol: str) -> pd.DataFrame:
 def analyze_stock(
     code: str,
     name: str,
-    market_cap: float,
+    market_cap: Any,
     em_symbol: str,
     cfg: ScanConfig,
 ) -> Optional[dict[str, Any]]:
@@ -447,7 +548,7 @@ def run_scan(
                 return analyze_stock(
                     code=row["code"],
                     name=row["name"],
-                    market_cap=float(row["market_cap"]),
+                    market_cap=row["market_cap"],
                     em_symbol=row["em_symbol"],
                     cfg=cfg,
                 )
@@ -476,7 +577,13 @@ def run_scan(
         prog.finished_at = datetime.now().isoformat(timespec="seconds")
     except Exception as exc:
         prog.status = "error"
-        prog.error = str(exc)
+        err = str(exc)
+        if "Connection reset" in err or "Connection aborted" in err:
+            err += (
+                "（东方财富可能限流 Render 机房 IP）。"
+                "请将扫描上限设为 30～50、并发设为 2，或改用本机 run_local.bat。"
+            )
+        prog.error = err
         prog.message = "扫描失败"
         prog.finished_at = datetime.now().isoformat(timespec="seconds")
     if on_progress:

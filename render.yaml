@@ -6,3 +6,10 @@ services:
     buildCommand: pip install -r scripts/stock_screener_web/requirements-deploy.txt
     startCommand: cd scripts/stock_screener_web && uvicorn app:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
+    envVars:
+      - key: SCREENER_CLOUD
+        value: "1"
+      - key: SCREENER_REQUEST_DELAY
+        value: "0.65"
+      - key: SCREENER_MAX_WORKERS
+        value: "3"
