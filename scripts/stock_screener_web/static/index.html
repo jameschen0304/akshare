@@ -38,7 +38,7 @@
         </label>
         <label>
           <span>并发线程数</span>
-          <input type="number" name="max_workers" value="6" min="1" max="16" />
+          <input type="number" name="max_workers" value="3" min="1" max="8" />
         </label>
         <label>
           <span>最低流动比率</span>
@@ -49,7 +49,7 @@
           <input type="number" name="revenue_growth_years" value="3" min="2" max="5" />
         </label>
         <label class="checkbox-row">
-          <input type="checkbox" name="apply_hard_rules" checked />
+          <input type="checkbox" name="apply_hard_rules" />
           <span>仅保留通过硬性规则的股票（流动比率 + 连续年报收入递增）</span>
         </label>
       </form>

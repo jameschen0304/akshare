@@ -316,14 +316,8 @@ def passes_hard_rules(
     cr = latest.get("current_ratio")
     if pd.isna(cr) or float(cr) < cfg.min_current_ratio:
         reasons.append(f"流动比率<{cfg.min_current_ratio}")
-    need_years = cfg.revenue_growth_years
-    max_from_periods = max(2, (cfg.periods or 6) // 2)
-    if need_years > max_from_periods:
-        reasons.append(
-            f"收入连增需{need_years}个年报，请把「展示报告期数」调到至少 {need_years * 2} 或降低连增年数"
-        )
-    elif not annual_revenue_increasing(profit_df, need_years):
-        reasons.append(f"最近{need_years}个年报收入未连增")
+    if not annual_revenue_increasing(profit_df, cfg.revenue_growth_years):
+        reasons.append(f"最近{cfg.revenue_growth_years}个年报收入未连增")
     return len(reasons) == 0, reasons
 
 
@@ -337,6 +331,16 @@ def _extract_profit(em_symbol: str) -> pd.DataFrame:
     for key, col in PROFIT_FIELDS.items():
         if col in raw.columns:
             df[key] = pd.to_numeric(raw[col], errors="coerce")
+    if "deduct_net_parent" not in df.columns or df["deduct_net_parent"].isna().all():
+        for col in (
+            "DEDUCT_PARENT_NETPROFIT",
+            "DEDUCT_NETPROFIT",
+            "PARENT_NETPROFIT",
+            "NETPROFIT",
+        ):
+            if col in raw.columns:
+                df["deduct_net_parent"] = pd.to_numeric(raw[col], errors="coerce")
+                break
     return df.drop_duplicates(subset=["report_date"], keep="first")
 
 
