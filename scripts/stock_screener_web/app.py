@@ -18,6 +18,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -37,6 +38,18 @@ from screener import (
 STATIC_DIR = APP_DIR / "static"
 
 app = FastAPI(title="A股选股工具", version="1.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://jameschen0304.github.io",
+        "http://localhost:8765",
+        "http://127.0.0.1:8765",
+    ],
+    allow_origin_regex=r"https://.*\.github\.io",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 _jobs: dict[str, ScanJob] = {}
@@ -54,6 +67,11 @@ class ScanRequest(BaseModel):
     )
     min_current_ratio: float = Field(1.0, ge=0)
     revenue_growth_years: int = Field(3, ge=2, le=5)
+
+
+@app.get("/api/health")
+def health() -> dict:
+    return {"status": "ok"}
 
 
 @app.get("/", response_class=HTMLResponse)
