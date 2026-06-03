@@ -153,13 +153,13 @@ def default_max_workers_cap() -> int:
 
 @dataclass
 class ScanConfig:
-    pe_min: float = 5.0
-    pe_max: float = 25.0
+    pe_min: float = 3.0
+    pe_max: float = 40.0
     periods: int = 8  # ~4 years of semi-annual + annual
     max_workers: int = 6
     request_delay: float = 0.15
     limit: int = 0  # 0 = no limit
-    apply_hard_rules: bool = True
+    apply_hard_rules: bool = False
     min_current_ratio: float = 1.0
     revenue_growth_years: int = 3  # consecutive annual revenue increase
 
@@ -235,11 +235,68 @@ def _load_universe_from_spot() -> pd.DataFrame:
     return universe.reset_index(drop=True)
 
 
+def _load_universe_push2(max_pages: int = 3) -> pd.DataFrame:
+    """push2 行情列表（总市值 f20 多为万元）。"""
+    url = "https://push2.eastmoney.com/api/qt/clist/get"
+    base_params = {
+        "pz": "100",
+        "po": "1",
+        "np": "1",
+        "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+        "fltt": "2",
+        "invt": "2",
+        "fid": "f12",
+        "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048",
+        "fields": "f12,f14,f20",
+    }
+    rows: list[dict[str, Any]] = []
+    with _NoProxySession() as session:
+        for pn in range(1, max_pages + 1):
+            params = {**base_params, "pn": str(pn)}
+            r = _retry_em_request(session.get, url, params=params, timeout=20)
+            r.raise_for_status()
+            data = r.json()
+            diff = data.get("data", {}).get("diff") or []
+            if isinstance(diff, dict):
+                diff = list(diff.values())
+            if not diff:
+                break
+            rows.extend(diff)
+            total = data.get("data", {}).get("total") or len(diff)
+            per = len(diff) or 100
+            total_pages = (int(total) + per - 1) // per
+            if pn >= total_pages:
+                break
+            time.sleep(0.3)
+    if not rows:
+        raise RuntimeError("push2 股票池为空")
+    df = pd.DataFrame(rows).rename(columns={"f12": "code", "f14": "name", "f20": "market_cap"})
+    df["code"] = df["code"].astype(str).str.zfill(6)
+    df["market_cap"] = df["market_cap"].apply(normalize_market_cap)
+    mask = (
+        df["market_cap"].notna()
+        & (df["market_cap"] > 0)
+        & ~df["name"].map(is_st_stock)
+        & ~df["code"].map(is_star_market)
+    )
+    out = df.loc[mask, ["code", "name", "market_cap"]].copy()
+    out["em_symbol"] = out["code"].map(to_em_symbol)
+    return out.reset_index(drop=True)
+
+
 def load_universe() -> pd.DataFrame:
     last_err: Exception | None = None
     for attempt in range(4):
         try:
-            return _load_universe_from_spot()
+            u = _load_universe_from_spot()
+            if u["market_cap"].notna().sum() > 100:
+                return u
+        except Exception as exc:
+            last_err = exc
+            time.sleep(1.2 * (attempt + 1))
+    for attempt in range(3):
+        try:
+            return _load_universe_push2(max_pages=5)
         except Exception as exc:
             last_err = exc
             time.sleep(1.2 * (attempt + 1))
@@ -458,6 +515,77 @@ def _extract_balance(em_symbol: str) -> pd.DataFrame:
     return df.drop_duplicates(subset=["report_date"], keep="first")
 
 
+def _preview_row(
+    code: str, name: str, cap: float, pe: float, cfg: ScanConfig, note: str
+) -> dict[str, Any]:
+    return {
+        "code": code,
+        "name": name,
+        "market_cap": cap,
+        "pe_ttm": round(pe, 2),
+        "latest_report_date": None,
+        "latest_gross_margin": None,
+        "latest_net_margin": None,
+        "latest_current_ratio": None,
+        "hard_rules_pass": False,
+        "hard_rules_note": note,
+        "is_preview": True,
+    }
+
+
+def analyze_stock_ex(
+    code: str,
+    name: str,
+    market_cap: Any,
+    em_symbol: str,
+    cfg: ScanConfig,
+) -> tuple[Optional[dict[str, Any]], str, Optional[dict[str, Any]]]:
+    """返回 (命中结果, 统计键, PE 预览行)。"""
+    profit_df = _extract_profit(em_symbol)
+    balance_df = _extract_balance(em_symbol)
+    if profit_df.empty or balance_df.empty:
+        return None, "no_finance", None
+
+    ttm_profit = calc_ttm_deduct(profit_df)
+    cap = resolve_market_cap(code, market_cap)
+    if cap is None:
+        return None, "no_cap", None
+    pe_ttm = calc_pe_ttm(cap, ttm_profit)
+    if ttm_profit is None or pe_ttm is None:
+        return None, "no_ttm", None
+    if not (cfg.pe_min <= pe_ttm <= cfg.pe_max):
+        note = f"PE {round(pe_ttm, 2)} 不在 {cfg.pe_min}–{cfg.pe_max}"
+        return None, "pe_out", _preview_row(code, name, cap, pe_ttm, cfg, note)
+
+    metrics = build_period_metrics(profit_df, balance_df, cfg.periods)
+    if metrics.empty:
+        return None, "no_finance", None
+
+    hard_ok, hard_reasons = passes_hard_rules(metrics, profit_df, cfg)
+    if cfg.apply_hard_rules and not hard_ok:
+        return None, "hard_fail", None
+
+    latest = metrics.iloc[-1]
+    return (
+        {
+            "code": code,
+            "name": name,
+            "market_cap": cap,
+            "pe_ttm": round(pe_ttm, 2),
+            "ttm_deduct_profit": ttm_profit,
+            "latest_report_date": latest["report_date"],
+            "latest_gross_margin": _pct(latest.get("gross_margin")),
+            "latest_net_margin": _pct(latest.get("net_margin")),
+            "latest_current_ratio": _round(latest.get("current_ratio"), 3),
+            "hard_rules_pass": hard_ok,
+            "hard_rules_note": "; ".join(hard_reasons) if hard_reasons else "通过",
+            "periods": metrics.to_dict(orient="records"),
+        },
+        "passed",
+        None,
+    )
+
+
 def analyze_stock(
     code: str,
     name: str,
@@ -465,42 +593,30 @@ def analyze_stock(
     em_symbol: str,
     cfg: ScanConfig,
 ) -> Optional[dict[str, Any]]:
-    profit_df = _extract_profit(em_symbol)
-    balance_df = _extract_balance(em_symbol)
-    if profit_df.empty or balance_df.empty:
-        return None
+    item, _, _ = analyze_stock_ex(code, name, market_cap, em_symbol, cfg)
+    return item
 
-    ttm_profit = calc_ttm_deduct(profit_df)
-    cap = resolve_market_cap(code, market_cap)
-    if cap is None:
-        return None
-    pe_ttm = calc_pe_ttm(cap, ttm_profit)
-    if pe_ttm is None or not (cfg.pe_min <= pe_ttm <= cfg.pe_max):
-        return None
 
-    metrics = build_period_metrics(profit_df, balance_df, cfg.periods)
-    if metrics.empty:
-        return None
-
-    hard_ok, hard_reasons = passes_hard_rules(metrics, profit_df, cfg)
-    if cfg.apply_hard_rules and not hard_ok:
-        return None
-
-    latest = metrics.iloc[-1]
-    return {
-        "code": code,
-        "name": name,
-        "market_cap": cap,
-        "pe_ttm": round(pe_ttm, 2),
-        "ttm_deduct_profit": ttm_profit,
-        "latest_report_date": latest["report_date"],
-        "latest_gross_margin": _pct(latest.get("gross_margin")),
-        "latest_net_margin": _pct(latest.get("net_margin")),
-        "latest_current_ratio": _round(latest.get("current_ratio"), 3),
-        "hard_rules_pass": hard_ok,
-        "hard_rules_note": "; ".join(hard_reasons) if hard_reasons else "通过",
-        "periods": metrics.to_dict(orient="records"),
-    }
+def _format_done_message(prog: ScanProgress, stats: ScanStats, cfg: ScanConfig) -> str:
+    msg = f"完成：命中 {prog.passed} / {prog.total}"
+    if prog.passed == 0 and prog.total > 0:
+        parts = []
+        if stats.pe_out:
+            parts.append(f"PE 不在 {cfg.pe_min}–{cfg.pe_max}：{stats.pe_out} 只")
+        if stats.no_finance:
+            parts.append(f"无财报：{stats.no_finance} 只")
+        if stats.no_cap:
+            parts.append(f"无市值：{stats.no_cap} 只")
+        if stats.no_ttm:
+            parts.append(f"无扣非 TTM：{stats.no_ttm} 只")
+        if stats.hard_fail:
+            parts.append(f"硬性规则未过：{stats.hard_fail} 只")
+        if stats.errors:
+            parts.append(f"拉取异常：{stats.errors} 只")
+        if parts:
+            msg += "（" + "；".join(parts) + "）"
+        msg += "。可放宽市盈率或取消硬性规则；下方灰色为 PE 预览"
+    return msg
 
 
 def _pct(v: Any) -> Optional[str]:
@@ -516,11 +632,23 @@ def _round(v: Any, n: int = 2) -> Optional[float]:
 
 
 @dataclass
+class ScanStats:
+    no_finance: int = 0
+    no_cap: int = 0
+    no_ttm: int = 0
+    pe_out: int = 0
+    hard_fail: int = 0
+    errors: int = 0
+
+
+@dataclass
 class ScanJob:
     config: ScanConfig
     progress: ScanProgress = field(default_factory=ScanProgress)
     results: list[dict[str, Any]] = field(default_factory=list)
     summary_rows: list[dict[str, Any]] = field(default_factory=list)
+    preview_rows: list[dict[str, Any]] = field(default_factory=list)
+    stats: ScanStats = field(default_factory=ScanStats)
 
 
 def run_scan(
@@ -542,18 +670,28 @@ def run_scan(
         if on_progress:
             on_progress(prog)
 
-        def _task(row: pd.Series) -> Optional[dict[str, Any]]:
+        stats = job.stats
+
+        def _task(row: pd.Series) -> None:
             time.sleep(cfg.request_delay)
             try:
-                return analyze_stock(
+                item, key, preview = analyze_stock_ex(
                     code=row["code"],
                     name=row["name"],
                     market_cap=row["market_cap"],
                     em_symbol=row["em_symbol"],
                     cfg=cfg,
                 )
+                if item:
+                    job.results.append(item)
+                    job.summary_rows.append(_summary_row(item))
+                    prog.passed += 1
+                elif hasattr(stats, key):
+                    setattr(stats, key, getattr(stats, key) + 1)
+                    if preview and len(job.preview_rows) < 20:
+                        job.preview_rows.append(preview)
             except Exception:
-                return None
+                stats.errors += 1
 
         with ThreadPoolExecutor(max_workers=cfg.max_workers) as pool:
             futures = {
@@ -561,19 +699,16 @@ def run_scan(
             }
             for fut in as_completed(futures):
                 prog.done += 1
-                item = fut.result()
-                if item:
-                    job.results.append(item)
-                    job.summary_rows.append(_summary_row(item))
-                    prog.passed += 1
+                fut.result()
                 if on_progress and prog.done % 5 == 0:
                     on_progress(prog)
                 if prog.done % 10 == 0:
                     prog.message = f"已处理 {prog.done}/{prog.total}，命中 {prog.passed}"
 
         job.summary_rows.sort(key=lambda x: x.get("pe_ttm") or 999)
+        job.preview_rows.sort(key=lambda x: x.get("pe_ttm") or 999)
         prog.status = "done"
-        prog.message = f"完成：命中 {prog.passed} / {prog.total}"
+        prog.message = _format_done_message(prog, stats, cfg)
         prog.finished_at = datetime.now().isoformat(timespec="seconds")
     except Exception as exc:
         prog.status = "error"

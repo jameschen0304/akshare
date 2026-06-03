@@ -95,7 +95,10 @@ async function loadResults() {
   const res = await fetch(`/api/scan/${currentJobId}/results`);
   const data = await res.json();
   lastDetails = data.details || [];
-  renderSummary(data.summary || []);
+  const summary = [...(data.summary || [])];
+  const preview = (data.preview || []).map((r) => ({ ...r, is_preview: true }));
+  const rows = summary.length ? summary.concat(preview) : preview;
+  renderSummary(rows);
   el("resultCount").textContent = String(data.count || 0);
 }
 
@@ -112,9 +115,9 @@ function renderSummary(rows) {
   tbody.innerHTML = rows
     .map(
       (r) => `
-    <tr>
+    <tr style="${r.is_preview ? "opacity:0.75;color:#8b9cb3" : ""}">
       <td class="num">${r.code}</td>
-      <td>${r.name}</td>
+      <td>${r.name}${r.is_preview ? " (预览)" : ""}</td>
       <td class="num">${r.pe_ttm}</td>
       <td class="num">${fmtNum(r.market_cap)}</td>
       <td>${r.latest_report_date || "—"}</td>

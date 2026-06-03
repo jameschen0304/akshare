@@ -60,8 +60,8 @@ _lock = threading.Lock()
 
 
 class ScanRequest(BaseModel):
-    pe_min: float = Field(5, ge=0)
-    pe_max: float = Field(25, ge=0)
+    pe_min: float = Field(3, ge=0)
+    pe_max: float = Field(40, ge=0)
     periods: int = Field(8, ge=2, le=12)
     limit: int = Field(80, ge=0, le=6000)
     max_workers: int = Field(6, ge=1, le=16)
@@ -141,11 +141,21 @@ def scan_results(job_id: str) -> dict:
     if job.progress.status not in ("done", "running"):
         if job.progress.status == "error":
             raise HTTPException(500, job.progress.error or "扫描失败")
+    st = job.stats
     return {
         "status": job.progress.status,
         "summary": job.summary_rows,
+        "preview": job.preview_rows,
         "count": len(job.results),
         "details": job.results,
+        "stats": {
+            "no_finance": st.no_finance,
+            "no_cap": st.no_cap,
+            "no_ttm": st.no_ttm,
+            "pe_out": st.pe_out,
+            "hard_fail": st.hard_fail,
+            "errors": st.errors,
+        },
     }
 
 
