@@ -67,7 +67,11 @@ async function pollStatus() {
     const res = await fetch(`/api/scan/${currentJobId}/status`);
     const st = await res.json();
     el("progressFill").style.width = st.percent + "%";
-    el("progressText").textContent = `${st.message} (${st.done}/${st.total}，命中 ${st.passed})`;
+    const poolHint =
+      st.status === "running" && st.total === 0
+        ? "（加载股票池中，约 1～3 分钟，请勿关闭页面）"
+        : "";
+    el("progressText").textContent = `${st.message} (${st.done}/${st.total}，命中 ${st.passed})${poolHint}`;
 
     if (st.status === "done" || st.status === "error") {
       clearInterval(pollTimer);

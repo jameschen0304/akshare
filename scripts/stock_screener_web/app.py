@@ -66,7 +66,7 @@ class ScanRequest(BaseModel):
     limit: int = Field(80, ge=0, le=6000)
     max_workers: int = Field(6, ge=1, le=16)
     apply_hard_rules: bool = Field(
-        True, description="为 true 时仅保留通过硬性规则的股票"
+        False, description="为 true 时仅保留通过硬性规则的股票"
     )
     min_current_ratio: float = Field(1.0, ge=0)
     revenue_growth_years: int = Field(3, ge=2, le=5)
