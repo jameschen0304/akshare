@@ -393,6 +393,22 @@ def calc_pe_ttm(market_cap: float, ttm_profit: Optional[float]) -> Optional[floa
     return float(market_cap) / float(ttm_profit)
 
 
+def calc_sales_net_margin(deduct: Any, revenue: Any) -> Optional[float]:
+    """销售净利率 = 扣非净利 / 营业总收入。扣非大于营收（如港口/投资控股）时无意义。"""
+    if deduct is None or revenue is None or pd.isna(deduct) or pd.isna(revenue):
+        return None
+    rev = float(revenue)
+    ded = float(deduct)
+    if rev <= 0:
+        return None
+    if ded > rev * 1.02:
+        return None
+    ratio = ded / rev
+    if ratio > 1.0 or ratio < -1.0:
+        return None
+    return ratio
+
+
 def build_period_metrics(
     profit_df: pd.DataFrame, balance_df: pd.DataFrame, periods: int
 ) -> pd.DataFrame:
@@ -421,11 +437,7 @@ def build_period_metrics(
             if gross_profit is not None and revenue and float(revenue) > 0
             else None
         )
-        net_margin = (
-            float(deduct) / float(revenue)
-            if pd.notna(deduct) and revenue and float(revenue) > 0
-            else None
-        )
+        net_margin = calc_sales_net_margin(deduct, revenue)
         current_ratio = (
             float(ca) / float(cl)
             if pd.notna(ca) and pd.notna(cl) and float(cl) > 0
