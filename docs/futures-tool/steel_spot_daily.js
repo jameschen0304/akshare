@@ -1,6 +1,6 @@
 window.__steelSpotSnapshot = {
   "source": "99qh primary + 100ppi fallback via akshare snapshot",
-  "generated_at": "2026-08-28T13:24:19.863924+00:00",
+  "generated_at": "2026-08-31T07:25:28.263073+00:00",
   "symbols": {
     "螺纹钢": [
       {
